@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+
+from argparse import ArgumentParser
+import logging
+import os
+import asyncio
+import sys
+import errno
+from distutils.version import LooseVersion
+
+log = logging.getLogger('ab-flasher')
+
+def die(code, message=None):
+    if message:
+        log.critical(message)
+    sys.exit(code)
+
+async def check_version_file(version_file, expected_version, dry_run):
+    try:
+        with open(version_file, 'r') as f:
+            current_version = f.read().strip().decode()
+    except FileNotFoundError:
+        log.debug('Current partition has no version, assuming 0')
+        current_version = '0'
+        if dry_run:
+            log.warning('Dry run - would create version file')
+        else:
+            log.debug('Creating current version file')
+            with open(version_file, 'w') as f:
+                f.write(current_version)
+    except IOError as e:
+        if e[0] == errno.EPERM:
+            die(errno.EPERM, 'You don\'t have permission to access the version file. Try running as root.')
+        else:
+            raise
+    
+    log.debug(f'current_version is {current_version}. expected_version is {expected_version}.')
+    try:
+        if LooseVersion(current_version) >= LooseVersion(expected_version):
+            log.info(f'No upgrade is required ({current_version} >= {expected_version})')
+            return False
+    except TypeError:
+        log.warning('Version comparison failed, assuming upgrade is required')
+    
+    return True
+
+
+async def get_active_partition(version_file):
+    proc = await asyncio.create_subprocess_exec('df', '/', stdout=asyncio.subprocess.PIPE)
+    await proc.stdout.readline() # header
+    data = await proc.stdout.readline()
+    device = data.decode().strip().split(maxsplit=1)[0]
+    
+    if not device or device[0] != '/' or await proc.wait() > 0:
+        die(1, 'Could not read partition map')
+
+    return device
+
+
+async def main():
+    parser = ArgumentParser()
+    parser.add_argument('--dry-run', action='store_true', help='Take no actions.')
+    parser.add_argument('--no-reboot', help='Don\'t reboot after an update.')
+    parser.add_argument('--checksum', help='URL to a file containing a checksum, used to verify the write.')
+    parser.add_argument('--verbose', '-v', action='count', default=0, help='Verbosity of logging. Specify multiple times for more.')
+    parser.add_argument('--version-file', default='/.ab_version', help='File to check for volume version (at host)')
+    parser.add_argument('--force', action='store_true', help='Assume upgrade is required')
+    parser.add_argument('--host', default='/', help='Path to host\'s active partition (usually only needed for Docker)')
+    parser.add_argument('new_version', help='New version number (e.g. 1.2.3).')
+    parser.add_argument('image_url', help='URL to new version image.')
+    cli_args = parser.parse_args()
+
+    log_level = max(logging.DEBUG, logging.WARNING - (logging.DEBUG * cli_args.verbose))
+    logging.basicConfig(level=log_level)
+    log.debug(f'Log level is {log_level}')
+
+    if cli_args.force:
+        log.warning('Skipping version check due to "force" flag')
+    elif not await check_version_file(cli_args.version_file, cli_args.new_version, cli_args.dry_run):
+        die(0, 'No upgrade is required')
+
+    log.debug(f'Upgrading to {cli_args.new_version}')
+
+    active_part = await get_active_partition(cli_args.version_file)
+    log.info(f'Active partition is {active_part}')
+
+asyncio.run(main())
