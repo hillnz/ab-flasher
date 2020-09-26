@@ -16,6 +16,10 @@ When you run ab-flasher:, it:
 
 ## Usage
 
+### Dependencies
+
+Install using `poetry install` or `pip install -f requirements.txt`.
+
 ## Why it exists
 
 Traditionally you might keep a Pi updated by either running in place upgrades (`apt-get update` etc) or reflashing the SD card. These are slow and risky - package mangers usually do a good job but can take a long time and a failure could leave a headless system in a broken state. For these reasons, it's unusual that people have the confidence to run these updates automatically. Reflashing SD cards is labour intensive, for obvious reasons.
@@ -34,4 +38,4 @@ Some known limitations:
 - Doesn't poll anywhere for updates, you need to tell it the new version when it runs.
 - Doesn't integrate with the bootloader for failover. The bootloader won't know to failover if a partition is bad.
 - Simplistic in its partiion inspection, so stick to simple partitioning schemes.
-
+- Only supports gz images (gz tends to use the least cpu/memory anyway).

@@ -1,87 +1,336 @@
 #!/usr/bin/env python3
 
 from argparse import ArgumentParser
+from asyncio import subprocess
 import logging
 import os
 import asyncio
 import sys
 import errno
 from distutils.version import LooseVersion
+import zlib
+from zlib import decompressobj
+import aiohttp
+from tempfile import NamedTemporaryFile, mkdtemp
+from tarfile import TarFile
+from typing import List
+from contextlib import asynccontextmanager
 
 log = logging.getLogger('ab-flasher')
 
-def die(code, message=None):
+def die(message, code=1):
     if message:
         log.critical(message)
     sys.exit(code)
 
-async def check_version_file(version_file, expected_version, dry_run):
+# Unknown if optimal, this is what shutil uses
+COPY_BUFSIZE = 1024 * 1024
+
+async def pipeline(*stage_funcs):
+    # Build chain, passing lower stages to higher ones
+    lower = None
+    stages = []
+    for stage_func in reversed(stage_funcs):
+        if lower is None:
+            lower = stage_func()
+        else:
+            lower = stage_func(lower.asend)
+        stages.append(lower)
+    stages.reverse()
+    
+    producer = stages.pop(0)
+    # Start the generators (producer isn't one, it just sends to the lower layers)
+    for stage in stages:
+        await stage.asend(None)
+    # When this completes it means all has been sent to the lower layers
+    await producer
+    for stage in stages:
+        await stage.aclose()
+
+
+def get_mounts(host='/') -> List[dict]:
+    proc_mounts = os.path.join(host, 'proc/mounts')
+
     try:
-        with open(version_file, 'r') as f:
-            current_version = f.read().strip().decode()
+        with open(proc_mounts, 'r') as f:
+            mounts_file = f.read().strip()
     except FileNotFoundError:
-        log.debug('Current partition has no version, assuming 0')
-        current_version = '0'
-        if dry_run:
-            log.warning('Dry run - would create version file')
-        else:
-            log.debug('Creating current version file')
-            with open(version_file, 'w') as f:
-                f.write(current_version)
-    except IOError as e:
-        if e[0] == errno.EPERM:
-            die(errno.EPERM, 'You don\'t have permission to access the version file. Try running as root.')
-        else:
-            raise
+        die('Couldn\'t find /proc/mounts (not Linux or not mounted?)')
+    except:
+        die('Couldn\'t read mounts (try running as root?)')
+        
+    mounts = []
+    for mount in mounts_file.split('\n'):
+        device, path, fs, options, _ = tuple(mount.split(maxsplit=4))
+        options = options.split(',')
+        mounts.append({ 'device': device, 'path': path, 'fs': fs, 'options': options })
+
+    return mounts
+
+
+@asynccontextmanager
+async def mount(device, mode='rw', host='/'):
+    mounts = get_mounts(host)
+    mount = next(( m for m in mounts if m['device'] == device and mode in m['options'] ), None)
+    if mount:
+        yield mount['path']
+        return
     
-    log.debug(f'current_version is {current_version}. expected_version is {expected_version}.')
+    log.debug(f'{device} is not mounted yet')
+
+    mount_point = mkdtemp()
     try:
-        if LooseVersion(current_version) >= LooseVersion(expected_version):
-            log.info(f'No upgrade is required ({current_version} >= {expected_version})')
-            return False
-    except TypeError:
-        log.warning('Version comparison failed, assuming upgrade is required')
+        returncode = await (await asyncio.create_subprocess_exec('mount', '-o', 'rw', device, mount_point)).wait()
+        if returncode != 0:
+            raise Exception(f'mount had returncode {returncode}')
+        yield mount_point
+    finally:
+        await (await asyncio.create_subprocess_exec('umount', mount_point)).wait()
+
+
+
+async def get_active_partition(version_file: str, host='/'):
+    mounts = [ (m['path'], m['device']) for m in get_mounts(host).items() ]
+    mounts.sort(lambda m: len(m[0]), reverse=True)
+
+    # Locate the version file
+    file_dir = os.path.dirname(os.path.join(host, version_file.lstrip('/')))
+    active_device = None
+    for path, device in mounts:
+        if len(path) > len(file_dir):
+            continue
+        if file_dir[:len(path)] == path:
+            active_device = device
+            break
+    if not active_device:
+        die('Active partition could not be located')
+
+    return active_device
+      
+
+async def get_http_bytes(url, send_download_bytes):
+    log.debug('get_http_bytes')
+    bytes = 0
+    async with aiohttp.request('GET', url, raise_for_status=True) as resp:
+        content_length = resp.content_length
+        log.info(f'Expecting to download {content_length} bytes')
+        async for chunk in resp.content.iter_chunked(COPY_BUFSIZE):
+            bytes += len(chunk)
+            await send_download_bytes(chunk)
+    log.debug(f'Downloaded {bytes} bytes') 
+
+class Flasher:
     
-    return True
+    def __init__(self, host, version_file, url, dry_run):
+        self.host = host
+        self.version_file = version_file
+        self.url = url
+        self.dry_run = dry_run
 
 
-async def get_active_partition(version_file):
-    proc = await asyncio.create_subprocess_exec('df', '/', stdout=asyncio.subprocess.PIPE)
-    await proc.stdout.readline() # header
-    data = await proc.stdout.readline()
-    device = data.decode().strip().split(maxsplit=1)[0]
-    
-    if not device or device[0] != '/' or await proc.wait() > 0:
-        die(1, 'Could not read partition map')
 
-    return device
+    async def check_version_file(self, version_file, expected_version):
+        abs_v_file = self._host(version_file)
+        log.debug(f'Expecting version file at {abs_v_file}')
+        try:
+            with open(abs_v_file, 'r') as f:
+                current_version = f.read().strip().decode()
+        except FileNotFoundError:
+            log.debug('Current partition has no version, assuming 0')
+            current_version = '0'
+            if self.dry_run:
+                log.warning('Dry run - would create version file')
+            else:
+                log.debug('Creating current version file')
+                with open(abs_v_file, 'w') as f:
+                    f.write(current_version)
+        except IOError as e:
+            if e[0] == errno.EPERM:
+                die('You don\'t have permission to access the version file (try running as root?)')
+            else:
+                raise
+        
+        log.debug(f'current_version is {current_version}. expected_version is {expected_version}.')
+        try:
+            if LooseVersion(current_version) >= LooseVersion(expected_version):
+                log.info(f'No upgrade is required ({current_version} >= {expected_version})')
+                return False
+        except TypeError:
+            log.warning('Version comparison failed, assuming upgrade is required')
+        
+        return True
+
+
+
+    async def get_partition(self, part_dev):
+        proc_parts = self._host('/proc/partitions')
+        with open(proc_parts, 'r') as f:
+            f.readline() # header
+            f.readline() # blank
+            while item := tuple(f.readline().strip().split()):
+                _, _, blocks, name = item
+                if part_dev.endswith(name):
+                    return name, blocks * 1024
+        return None, None
+        
+        # active_dir = os.path.basename(self._host(version_file))
+
+    async def get_http_bytes(self, send_download_bytes):
+        log.debug('get_http_bytes')
+        bytes = 0
+        async with aiohttp.request('GET', self.url, raise_for_status=True) as resp:
+            content_length = resp.content_length
+            log.info(f'Expecting to download {content_length} bytes')
+            async for chunk in resp.content.iter_chunked(COPY_BUFSIZE):
+                bytes += len(chunk)
+                await send_download_bytes(chunk)
+        log.debug(f'Downloaded {bytes} bytes')
+
+    # TODO can decompress/write run in a thread. Any real performance gains?
+    async def decompress(self, send_raw_bytes):
+        log.debug('decompress')
+        in_bytes = out_bytes = 0
+        try:
+            gz = zlib.decompressobj(zlib.MAX_WBITS|32)
+            
+            while True:
+                gz_chunk = yield
+                in_bytes += len(gz_chunk)
+                raw_chunk = gz.decompress(gz_chunk)
+                out_bytes += len(raw_chunk)
+                await send_raw_bytes(raw_chunk)
+        finally:
+            log.debug(f'Decompressed {in_bytes} bytes to {out_bytes} bytes')
+
+
+
+
+    async def write_to_partition(self):
+        log.debug('write_to_partition')
+        partition = self.partition
+        max_length = self.partition_size or 0
+        if not partition:
+            raise Exception('partition is not set')
+        if not max_length:
+            log.warning('partition max_length isn\'t set so it won\'t be checked')
+        written_bytes = 0
+        try:
+            with open(partition, 'wb') as f:
+                while True:
+                    chunk = yield
+                    if chunk is not None:
+                        if written_bytes + len(chunk) > max_length:
+                            # TODO more specific exception
+                            raise Exception('length would exceed')
+                        f.write(chunk)
+                        written_bytes += len(chunk)
+        finally:
+            log.info(f'Wrote {written_bytes} bytes')
+
+
+async def untar(out_dir):
+    # There isn't an obvious way to use tarfile from a stream, so we use `tar`
+    with NamedTemporaryFile(delete=False) as f:
+        pipe_path = f.name
+    try:
+        os.mkfifo(pipe_path, mode=0o600)
+        
+        tar_proc = await asyncio.create_subprocess_exec('tar', 'xzf', '-' ,'-C', out_dir, stdin=subprocess.PIPE)
+        try:
+            while True:
+                tar_chunk = yield
+                tar_proc.stdin.write(tar_chunk)
+                await tar_proc.stdin.drain()
+        finally:
+            tar_proc.stdin.write_eof()
+            await tar_proc.stdin.drain()
+            await tar_proc.wait()
+    finally:
+        os.unlink(pipe_path)
+
+
+
 
 
 async def main():
     parser = ArgumentParser()
     parser.add_argument('--dry-run', action='store_true', help='Take no actions.')
-    parser.add_argument('--no-reboot', help='Don\'t reboot after an update.')
+    parser.add_argument('--no-reboot', action='store_true', help='Don\'t reboot after an update.')
     parser.add_argument('--checksum', help='URL to a file containing a checksum, used to verify the write.')
     parser.add_argument('--verbose', '-v', action='count', default=0, help='Verbosity of logging. Specify multiple times for more.')
     parser.add_argument('--version-file', default='/.ab_version', help='File to check for volume version (at host)')
     parser.add_argument('--force', action='store_true', help='Assume upgrade is required')
     parser.add_argument('--host', default='/', help='Path to host\'s active partition (usually only needed for Docker)')
     parser.add_argument('new_version', help='New version number (e.g. 1.2.3).')
-    parser.add_argument('image_url', help='URL to new version image.')
+    parser.add_argument('boot_files_url', help='URL to gzipped boot files.')
+    parser.add_argument('boot_partition', help='Partition containing boot files (e.g. sda1)')
+    parser.add_argument('os_image_url', help='URL to new gzipped image.')
+    parser.add_argument('os_partitions', type=lambda x: x.split(',', maxsplit=2), help='Which two partitions to consider (e.g. sda2,sda3)')
     cli_args = parser.parse_args()
 
     log_level = max(logging.DEBUG, logging.WARNING - (logging.DEBUG * cli_args.verbose))
     logging.basicConfig(level=log_level)
     log.debug(f'Log level is {log_level}')
 
+    host = cli_args.host
+    boot_url = cli_args.boot_files_url
+    boot_part = cli_args.boot_partition
+
+    flasher = Flasher(cli_args.host, cli_args.version_file, cli_args.image_url, cli_args.dry_run)
+
     if cli_args.force:
         log.warning('Skipping version check due to "force" flag')
-    elif not await check_version_file(cli_args.version_file, cli_args.new_version, cli_args.dry_run):
-        die(0, 'No upgrade is required')
+    elif not await flasher.check_version_file(cli_args.version_file, cli_args.new_version):
+        die('No upgrade is required', 0)
 
     log.debug(f'Upgrading to {cli_args.new_version}')
 
-    active_part = await get_active_partition(cli_args.version_file)
+    allowed_partitions = [ '/dev/' + p for p in cli_args.partitions ]
+    active_part = await flasher.get_active_partition()
     log.info(f'Active partition is {active_part}')
+    if not active_part in allowed_partitions:
+        die(f'Active partition ({active_part}) is not in the provided list ({",".join(allowed_partitions)}).')
+
+    inactive_part = next(( p for p in allowed_partitions if p != active_part ), '')
+    part_name, part_size = await flasher.get_partition(inactive_part)
+    if not part_name:
+        die(f'Proposed inactive partition ({inactive_part}) doesn\'t exist')
+    log.info(f'{part_name} will be flashed.')
+    part_size = int(part_size)
+    if cli_args.dry_run:
+        log.warning('Dry run - will write to /dev/null')
+        part_name = 'null'
+        part_size = sys.maxsize
+
+    flasher.partition = '/dev/' + part_name
+    flasher.partition_size = part_size
+
+    # Write partition
+    part_task = asyncio.create_task(
+        pipeline(
+            flasher.get_http_bytes,
+            flasher.decompress,
+            flasher.write_to_partition
+        )
+    )
+
+    INACTIVE_BOOT = 'inactive'
+
+    # Write boot files
+    async def write_boot_files():
+        async with mount('/dev/' + boot_part, host=host) as mountpoint:
+            await pipeline(
+                lambda n: get_http_bytes(boot_url, n),
+                lambda: untar(os.path.join(mountpoint, INACTIVE_BOOT))
+            )
+    boot_task = asyncio.create_task(write_boot_files())
+
+    await asyncio.wait([ part_task, boot_task ])
+
+
+    
+
+    # TODO Checksum
+
 
 asyncio.run(main())
