@@ -296,7 +296,7 @@ async def main():
     log.debug(f'Upgrading to {NEW_VERSION}')
 
     allowed_partitions = [ '/dev/' + p for p in IMG_PARTS ]
-    active_part = await get_active_partition()
+    active_part = await get_active_partition(VERSION_FILE)
     log.info(f'Active partition is {active_part}')
     if not active_part in allowed_partitions:
         die(f'Active partition ({active_part}) is not in the provided list ({",".join(allowed_partitions)}).')
