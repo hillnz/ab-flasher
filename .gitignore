@@ -140,3 +140,4 @@ cython_debug/
 boot/
 *.gz
 img
+*.sha256

@@ -52,7 +52,7 @@ HOST = cli_args.host
 NEW_VERSION = cli_args.new_version
 BOOT_URL = cli_args.boot_files_url
 BOOT_PART = cli_args.boot_partition
-IMG_URL = cli_args.image_url
+IMG_URL = cli_args.os_image_url
 IMG_PARTS = cli_args.os_partitions
 
 def host(path: str):
@@ -196,7 +196,10 @@ async def get_partition(part_dev):
     async with aiofiles.open(proc_parts, 'r') as f:
         await f.readline() # header
         await f.readline() # blank
-        while item := tuple(f.readline().strip().split()):
+        while True:
+            item = tuple(f.readline().strip().split())
+            if not item:
+                break
             _, _, blocks, name = item
             if part_dev.endswith(name):
                 return name, blocks * 1024
@@ -269,9 +272,12 @@ async def untar(out_dir):
         os.unlink(pipe_path)
 
 
-async def digest_file(hasher: hashlib._Hash, file_path: str):
+async def digest_file(hasher, file_path: str):
     async with aiofiles.open(file_path, 'rb') as f:
-        while chunk := await f.read(COPY_BUFSIZE):
+        while True:
+            chunk = await f.read(COPY_BUFSIZE)
+            if not chunk:
+                break
             hasher.update(chunk)
     return hasher.hexdigest()
 
