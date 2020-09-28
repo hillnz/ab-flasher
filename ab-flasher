@@ -327,7 +327,7 @@ async def main():
         if HASH_URL:
             hasher = hashlib.new(HASH_TYPE)
             async with aiohttp.request('GET', HASH_URL, raise_for_status=True) as resp:
-                expected_hash = await resp.content.read(hasher.digest_size * 2)
+                expected_hash = (await resp.content.read(hasher.digest_size * 2)).decode()
             if not re.match(r'[0-9A-Za-z]+', expected_hash):
                 die(f'Value fetched from {HASH_URL} is not a hash. Expecting hex.')
             await write_task
