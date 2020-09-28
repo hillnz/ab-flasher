@@ -130,7 +130,7 @@ async def mount(device, mode='rw'):
 
 
 async def get_active_partition(version_file: str):
-    mounts = [ (m['path'], m['device']) for m in get_mounts().items() ]
+    mounts = [ (m['path'], m['device']) for m in (await get_mounts()).items() ]
     mounts.sort(lambda m: len(m[0]), reverse=True)
 
     # Locate the version file
