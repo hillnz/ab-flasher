@@ -251,8 +251,8 @@ async def write_to_partition(partition, max_length=0):
 
 async def untar(out_dir):
     # There isn't an obvious way to use tarfile from a stream, so we use `tar`
-    with NamedTemporaryFile(delete=False) as f:
-        pipe_path = f.name
+    tmp = mkdtemp()
+    pipe_path = os.path.join(tmp, 'tar_pipe')
     try:
         os.mkfifo(pipe_path, mode=0o600)
         
@@ -272,6 +272,7 @@ async def untar(out_dir):
                 die('Untar of boot files failed')
     finally:
         os.unlink(pipe_path)
+        os.rmdir(tmp)
 
 
 async def digest_file(hasher, file_path: str):
