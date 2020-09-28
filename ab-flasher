@@ -199,7 +199,7 @@ async def get_partition(part_dev):
         await f.readline() # header
         await f.readline() # blank
         while True:
-            item = tuple(f.readline().strip().split())
+            item = tuple(await (f.readline()).strip().split())
             if not item:
                 break
             _, _, blocks, name = item
