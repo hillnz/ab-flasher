@@ -6,6 +6,7 @@ from asyncio import subprocess
 import logging
 import os
 import asyncio
+from os import makedirs
 import sys
 import errno
 from distutils.version import LooseVersion
@@ -172,6 +173,7 @@ async def check_version_file(version_file, expected_version):
             log.warning('Dry run - would create version file')
         else:
             log.debug('Creating current version file')
+            makedirs(os.path.dirname(abs_v_file), exist_ok=True)
             async with aiofiles.open(abs_v_file, 'w') as f:
                 await f.write(current_version)
     except IOError as e:
@@ -288,7 +290,7 @@ async def main():
 
     if FORCE:
         log.warning('Skipping version check due to "force" flag')
-    elif not await check_version_file(host(VERSION_FILE), NEW_VERSION):
+    elif not await check_version_file(VERSION_FILE, NEW_VERSION):
         die('No upgrade is required', 0)
 
     log.debug(f'Upgrading to {NEW_VERSION}')
