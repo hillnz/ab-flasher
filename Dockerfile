@@ -1,5 +1,8 @@
 FROM python:3.8.5-slim
 
+RUN apt-get update && apt-get install -y \
+    e2fsprogs
+
 WORKDIR /usr/src/app
 
 COPY requirements.txt ./

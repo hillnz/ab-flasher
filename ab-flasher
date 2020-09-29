@@ -84,10 +84,9 @@ async def pipeline(*stage_funcs):
     for stage in stages:
         await stage.asend(None)
     # When this completes it means all has been sent to the lower layers
-    result = await producer
+    await producer
     for stage in stages:
         await stage.aclose()
-    return result
 
 
 async def get_mounts() -> List[dict]:
@@ -159,7 +158,6 @@ async def get_http_bytes(url, send_download_bytes: Callable[[bytes], Coroutine])
             bytes += len(chunk)
             await send_download_bytes(chunk)
     log.debug(f'Downloaded {bytes} bytes')
-    return bytes
 
 
 async def check_version_file(version_file, expected_version):
@@ -321,10 +319,19 @@ async def main():
     max_flash_bytes = part_size
 
     async def write_os():
+        bytes_written = 0
+        async def count_bytes(send):
+            nonlocal bytes_written
+            while True:
+                chunk = yield
+                bytes_written += len(chunk)
+                await send(chunk)
+
         write_task = asyncio.create_task(
             pipeline(
                 lambda n: get_http_bytes(IMG_URL, n),
                 lambda n: decompress(n),
+                count_bytes,
                 lambda: write_to_partition(partition_to_flash, max_flash_bytes)
             )
         )
@@ -334,15 +341,19 @@ async def main():
                 expected_hash = (await resp.content.read(hasher.digest_size * 2)).decode()
             if not re.match(r'[0-9A-Za-z]+', expected_hash):
                 die(f'Value fetched from {HASH_URL} is not a hash. Expecting hex.')
-            bytes_downloaded = await write_task
+            await write_task
             log.info(f'Parition write done, starting verification (expecting {expected_hash})')
-            actual_hash = await digest_file(hasher, partition_to_flash, bytes_downloaded)
+            actual_hash = await digest_file(hasher, partition_to_flash, bytes_written)
             if expected_hash != actual_hash:
                 die(f'Written OS data does not match fetched hash ({actual_hash})')
             log.info('Write verification completed successfully')
         else:
             log.warning('Skipping write verification as no hash url specified')
             await write_task
+        log.debug('Expanding written filesystem')
+        r2proc = await asyncio.create_subprocess_exec('resize2fs', partition_to_flash)
+        if await r2proc.wait() != 0:
+            die('Expanding filesystem failed')
 
     async def write_boot():
         async with mount('/dev/' + BOOT_PART) as mountpoint:
