@@ -7,7 +7,7 @@ authors = ["Jono Hill <jonathan@hillnz.com>"]
 [tool.poetry.dependencies]
 python = "^3.8"
 aiohttp = "^3.6.2"
-aiofiles = "^0.5.0"
+aiofiles = "^0.6.0"
 
 [tool.poetry.dev-dependencies]
 
