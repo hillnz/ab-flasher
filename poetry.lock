@@ -1,18 +1,18 @@
 [[package]]
-category = "main"
-description = "File support for asyncio."
 name = "aiofiles"
+version = "0.6.0"
+description = "File support for asyncio."
+category = "main"
 optional = false
 python-versions = "*"
-version = "0.5.0"
 
 [[package]]
-category = "main"
-description = "Async http client/server framework (asyncio)"
 name = "aiohttp"
+version = "3.6.2"
+description = "Async http client/server framework (asyncio)"
+category = "main"
 optional = false
 python-versions = ">=3.5.3"
-version = "3.6.2"
 
 [package.dependencies]
 async-timeout = ">=3.0,<4.0"
@@ -25,72 +25,72 @@ yarl = ">=1.0,<2.0"
 speedups = ["aiodns", "brotlipy", "cchardet"]
 
 [[package]]
-category = "main"
-description = "Timeout context manager for asyncio programs"
 name = "async-timeout"
+version = "3.0.1"
+description = "Timeout context manager for asyncio programs"
+category = "main"
 optional = false
 python-versions = ">=3.5.3"
-version = "3.0.1"
 
 [[package]]
-category = "main"
-description = "Classes Without Boilerplate"
 name = "attrs"
+version = "20.2.0"
+description = "Classes Without Boilerplate"
+category = "main"
 optional = false
 python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*"
-version = "20.2.0"
 
 [package.extras]
-dev = ["coverage (>=5.0.2)", "hypothesis", "pympler", "pytest (>=4.3.0)", "six", "zope.interface", "sphinx", "sphinx-rtd-theme", "pre-commit"]
+dev = ["coverage[toml] (>=5.0.2)", "hypothesis", "pympler", "pytest (>=4.3.0)", "six", "zope.interface", "sphinx", "sphinx-rtd-theme", "pre-commit"]
 docs = ["sphinx", "sphinx-rtd-theme", "zope.interface"]
-tests = ["coverage (>=5.0.2)", "hypothesis", "pympler", "pytest (>=4.3.0)", "six", "zope.interface"]
-tests_no_zope = ["coverage (>=5.0.2)", "hypothesis", "pympler", "pytest (>=4.3.0)", "six"]
+tests = ["coverage[toml] (>=5.0.2)", "hypothesis", "pympler", "pytest (>=4.3.0)", "six", "zope.interface"]
+tests_no_zope = ["coverage[toml] (>=5.0.2)", "hypothesis", "pympler", "pytest (>=4.3.0)", "six"]
 
 [[package]]
-category = "main"
-description = "Universal encoding detector for Python 2 and 3"
 name = "chardet"
+version = "3.0.4"
+description = "Universal encoding detector for Python 2 and 3"
+category = "main"
 optional = false
 python-versions = "*"
-version = "3.0.4"
 
 [[package]]
-category = "main"
-description = "Internationalized Domain Names in Applications (IDNA)"
 name = "idna"
+version = "2.10"
+description = "Internationalized Domain Names in Applications (IDNA)"
+category = "main"
 optional = false
 python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*"
-version = "2.10"
 
 [[package]]
-category = "main"
-description = "multidict implementation"
 name = "multidict"
+version = "4.7.6"
+description = "multidict implementation"
+category = "main"
 optional = false
 python-versions = ">=3.5"
-version = "4.7.6"
 
 [[package]]
-category = "main"
-description = "Yet another URL library"
 name = "yarl"
+version = "1.5.1"
+description = "Yet another URL library"
+category = "main"
 optional = false
 python-versions = ">=3.5"
-version = "1.5.1"
 
 [package.dependencies]
 idna = ">=2.0"
 multidict = ">=4.0"
 
 [metadata]
-content-hash = "49c7291a457b52d8ff9201877ca5df0d04998df5b44fc8ebd47aa9341c06b996"
-lock-version = "1.0"
+lock-version = "1.1"
 python-versions = "^3.8"
+content-hash = "a2175966220ce2beb120cb44facd689fc73544ff0954b08162153c1873648a8b"
 
 [metadata.files]
 aiofiles = [
-    {file = "aiofiles-0.5.0-py3-none-any.whl", hash = "sha256:377fdf7815cc611870c59cbd07b68b180841d2a2b79812d8c218be02448c2acb"},
-    {file = "aiofiles-0.5.0.tar.gz", hash = "sha256:98e6bcfd1b50f97db4980e182ddd509b7cc35909e903a8fe50d8849e02d815af"},
+    {file = "aiofiles-0.6.0-py3-none-any.whl", hash = "sha256:bd3019af67f83b739f8e4053c6c0512a7f545b9a8d91aaeab55e6e0f9d123c27"},
+    {file = "aiofiles-0.6.0.tar.gz", hash = "sha256:e0281b157d3d5d59d803e3f4557dcc9a3dff28a4dd4829a9ff478adae50ca092"},
 ]
 aiohttp = [
     {file = "aiohttp-3.6.2-cp35-cp35m-macosx_10_13_x86_64.whl", hash = "sha256:1e984191d1ec186881ffaed4581092ba04f7c61582a177b187d3a2f07ed9719e"},
