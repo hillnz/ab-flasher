@@ -1,5 +1,5 @@
 # renovate: datasource=docker depName=python versioning=docker
-ARG PYTHON_VERSION=3.9.1
+ARG PYTHON_VERSION=3.9.2
 FROM python:${PYTHON_VERSION} AS poetry
 
 # renovate: datasource=pypi depName=poetry
