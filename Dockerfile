@@ -3,7 +3,7 @@ ARG PYTHON_VERSION=3.9.2
 FROM python:${PYTHON_VERSION} AS poetry
 
 # renovate: datasource=pypi depName=poetry
-ARG POETRY_VERSION=1.1.4
+ARG POETRY_VERSION=1.1.5
 RUN pip install poetry==${POETRY_VERSION}
 
 COPY pyproject.toml poetry.lock /tmp/
