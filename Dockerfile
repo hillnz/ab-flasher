@@ -1,7 +1,6 @@
 # renovate: datasource=docker depName=python versioning=docker
 ARG PYTHON_VERSION=3.9.4
 ARG BASE_IMAGE=python:${PYTHON_VERSION}
-ARG BUILDPLATFORM
 
 FROM --platform=${BUILDPLATFORM} python:${PYTHON_VERSION} AS poetry
 
