@@ -67,7 +67,7 @@ jobs:
         run: |
           DOCKER_TAG="$([ "$VERSION" = "" ] && echo test || echo "$VERSION")"
           if [ "$VARIANT" != "" ]; then
-            DOCKER_TAG="$(echo "${VERSION}-${VARIANT}")"
+            DOCKER_TAG="$(echo "${DOCKER_TAG}-${VARIANT}")"
           fi
           echo "::set-output name=DOCKER_TAGS::${DOCKER_REPO}:${DOCKER_TAG}"
 
