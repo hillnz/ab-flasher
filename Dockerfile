@@ -25,7 +25,7 @@ COPY . .
 
 # If systemd (if a real image) then set it up to run as a service
 COPY ab-flasher.service /tmp
-RUN if [ -d /etc/systemd/system ]; then \
+RUN if [[ -d /etc/systemd/system ]]; then \
         cp ab-flasher.service /etc/systemd/system/ab-flasher.service && \
         systemctl enable ab-flasher.service \
     fi; \
