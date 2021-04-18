@@ -13,8 +13,8 @@ RUN cd /tmp && poetry export -f requirements.txt --without-hashes >/tmp/requirem
 
 FROM ${BASE_IMAGE}
 
-RUN apt-get update && apt-get install -y \
-    e2fsprogs
+RUN apt-get update && apt-get install -y e2fsprogs && \
+    pip --version || apt-get install -y python3-pip
 
 WORKDIR /usr/src/ab-flasher
 
