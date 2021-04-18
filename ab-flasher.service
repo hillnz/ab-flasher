@@ -1,0 +1,17 @@
+# This is used by the Dockerfile if systemd is detected
+# (i.e. if being used for a real image)
+[Unit]
+Description=ab-flasher
+After=network.target
+
+[Service]
+# TODO params
+ExecStart=/usr/src/ab-flasher/ab-flasher
+WorkingDirectory=/usr/src/ab-flasher
+StandardOutput=inherit
+StandardError=inherit
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target

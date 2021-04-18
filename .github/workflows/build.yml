@@ -1,0 +1,92 @@
+name: build docker images
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+      - bootstrap
+
+env:
+  DOCKER_REPO: jonoh/ab-flasher
+
+jobs:
+  main:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        include:
+          # These are configured for updates in renovate.json
+          - base: python:3.9.4
+            # amd64 isn't actually useful because the script is rpi specific
+            # but it can be useful for testing
+            platforms: linux/amd64,linux/arm/v7,linux/arm64
+          - base: jonoh/raspberry-pi-os:2021.3.4
+            variant: rpi
+            platforms: linux/arm/v7
+          
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v1
+        if: ${{ github.ref == 'refs/heads/main' }}
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+      # TODO update poetry version
+      - name: Bump version and push tag
+        id: create_tag
+        uses: mathieudutour/github-tag-action@v5.4
+        if: ${{ github.ref == 'refs/heads/main' }}
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          create_annotated_tag: true
+
+      - name: Set docker tag(s)
+        id: docker_tag
+        env:
+          VERSION: ${{ steps.create_tag.outputs.new_tag }}
+          GIT_REF: ${{ github.ref }}
+          DOCKER_REPO: ${{ env.DOCKER_REPO }}
+          VARIANT: ${{ matrix.variant }}
+        # TODO latest
+        run: |
+          DOCKER_TAG="$([ "$VERSION" = "" ] && echo test || echo "$VERSION")"
+          if [ "$VARIANT" != "" ]; then
+            DOCKER_TAG="$(echo "${VERSION}-${VARIANT}")"
+          fi
+          echo "::set-output name=DOCKER_TAGS::${DOCKER_REPO}:${DOCKER_TAG}"
+
+      - name: Build and push
+        id: docker_build
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          file: ./Dockerfile
+          build-args: |
+            BASE_IMAGE=${{ matrix.base }}
+          platforms: ${{ matrix.platforms }}
+          push: ${{ github.ref == 'refs/heads/main' }}
+          tags: ${{ steps.docker_tag.outputs.DOCKER_TAGS }}
+
+      - name: Update repo description
+        uses: peter-evans/dockerhub-description@v2
+        if: ${{ github.ref == 'refs/heads/main' }}
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+          repository: ${{ env.DOCKER_REPO }}
