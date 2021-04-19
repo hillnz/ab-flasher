@@ -27,7 +27,7 @@ COPY . .
 COPY ab-flasher.service /tmp
 RUN if [[ -d /etc/systemd/system ]]; then \
         cp ab-flasher.service /etc/systemd/system/ab-flasher.service && \
-        systemctl enable ab-flasher.service \
+        systemctl enable ab-flasher.service; \
     fi; \
     rm /tmp/ab-flasher.service
 
