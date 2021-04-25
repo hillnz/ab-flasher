@@ -87,6 +87,7 @@ jobs:
             BASE_IMAGE=${{ matrix.base }}
           platforms: ${{ matrix.platforms }}
           push: ${{ github.ref == 'refs/heads/main' }}
+          load: ${{ matrix.variant == 'rpi' }}
           tags: ${{ steps.docker_tag.outputs.DOCKER_TAGS }}
 
       - name: Update repo description
