@@ -50,6 +50,7 @@ jobs:
         id: bump_version
         if: ${{ github.ref == 'refs/heads/main' }}
         run: |
+          pip3 install poetry
           git config user.name github-actions
           git config user.email github-actions@github.com
           VERSION=$(poetry version -s)
