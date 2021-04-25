@@ -75,9 +75,9 @@ jobs:
           if [ "$VARIANT" != "" ]; then
             SUFFIX="-${VARIANT}"
           fi
-          DOCKER_TAG="${DOCKER_REPO}:test${SUFFIX}"
+          DOCKER_TAG="${DOCKER_REPO}:latest${SUFFIX}"
           if [ "$VERSION" != "" ]; then
-            DOCKER_TAG="${DOCKER_TAG},${DOCKER_REPO}:latest${SUFFIX},${DOCKER_REPO}:${VERSION}${SUFFIX}"
+            DOCKER_TAG="${DOCKER_TAG},${DOCKER_REPO}:${VERSION}${SUFFIX}"
           fi
           echo "::set-output name=DOCKER_TAGS::${DOCKER_TAG}"
 
@@ -91,7 +91,7 @@ jobs:
             BASE_IMAGE=${{ matrix.base }}
           platforms: ${{ matrix.platforms }}
           push: ${{ github.ref == 'refs/heads/main' }}
-          load: ${{ matrix.variant == 'rpi' }}
+          load: ${{ github.ref != 'refs/heads/main' && matrix.variant == 'rpi' }}
           tags: ${{ steps.docker_tag.outputs.DOCKER_TAGS }}
 
       - name: Update repo description
@@ -111,7 +111,7 @@ jobs:
             -v /var/run/docker.sock:/var/run/docker.sock \
             -v $(pwd):/build \
             jonoh/rpi-docker-build \
-              --docker-image "${DOCKER_REPO}:test-rpi" \
+              --docker-image "${DOCKER_REPO}:latest-rpi" \
               --b-partition \
               --data-partition \
               /build/flash.img.gz
