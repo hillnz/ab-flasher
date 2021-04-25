@@ -1,7 +1,8 @@
+# ⚠️ WORK IN PROGRESS ⚠️
+
 # ab-flasher
 
-Simple tool to implement an A/B partition image update strategy for a device.
-Currently supports Raspberry Pi.
+Simple tool to implement an A/B partition image update strategy for a Raspberry Pi.
 
 ## What it does
 
@@ -16,9 +17,63 @@ When you run ab-flasher:, it:
 
 ## Usage
 
+usage: ab-flasher [-h] [--dry-run] [--no-reboot] [--hash-url HASH_URL]
+                  [--hash-type HASH_TYPE] [--verbose]
+                  [--version-file VERSION_FILE] [--force] [--host HOST]
+                  new_version boot_files_url boot_partition os_image_url
+                  os_partitions
+
+positional arguments:
+  new_version           New version number (e.g. 1.2.3).
+  boot_files_url        URL to gzipped boot files.
+  boot_partition        Partition containing boot files (e.g. sda1)
+  os_image_url          URL to new gzipped image.
+  os_partitions         Which two partitions to consider (e.g. sda2,sda3)
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --dry-run             Take no actions.
+  --no-reboot           Don't reboot after an update.
+  --hash-url HASH_URL   URL to a file containing a hash, used to verify the
+                        write.
+  --hash-type HASH_TYPE
+                        Type of hash contained in the hash file
+  --verbose, -v         Verbosity of logging. Specify multiple times for more.
+  --version-file VERSION_FILE
+                        File to check for volume version (at host)
+  --force               Assume upgrade is required
+  --host HOST           Path to host's active partition (usually only needed
+                        for Docker)
+
 ### Dependencies
 
-Install using `poetry install` or `pip install -f requirements.txt`.
+Install using `poetry install`.
+
+### Example
+
+Check if update to 1.2.3 is required.
+Flash it to the inactive partition (either sda2 or sda3) then update the bootloader at sda1.
+```
+ab-flasher \
+    --hash-url https://example.com/os.img.sha256 \
+    1.2.3 \
+    https://example.com/boot.tar.gz \
+    sda1 \
+    https://example.com/os.img.gz \
+    sda2,sda3
+```
+
+Using docker:
+```
+docker run --privileged -v /:/host jonoh/ab-flasher \
+    --host /host \
+    --hash-url https://example.com/os.img.sha256 \
+    1.2.3 \
+    https://example.com/boot.tar.gz \
+    sda1 \
+    https://example.com/os.img.gz \
+    sda2,sda3
+```
 
 ## Why it exists
 
