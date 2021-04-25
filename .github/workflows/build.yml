@@ -103,12 +103,12 @@ jobs:
           DOCKER_REPO: ${{ env.DOCKER_REPO }}
         run: |
           docker run --rm \
-            -v /var/run/docker.sock:/var/run/docker.sock
-            -v $(pwd):/build
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v $(pwd):/build \
             jonoh/rpi-docker-build \
               --docker-image "${DOCKER_REPO}:test-rpi" \
               --b-partition \
-              --data-partition
+              --data-partition \
               /build/flash.img.gz
 
       - name: Release
