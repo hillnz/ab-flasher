@@ -21,8 +21,7 @@ jobs:
         include:
           # These are configured for updates in renovate.json
           - base: python:3.9.4
-            # amd64 isn't actually useful because the script is rpi specific
-            # but it can be useful for testing
+            # Only works on rpi, but amd64 can be useful for testing
             platforms: linux/amd64,linux/arm/v7,linux/arm64
           - base: jonoh/raspberry-pi-os:2021.3.4
             variant: rpi
@@ -47,29 +46,36 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
-      # TODO update poetry version
-      - name: Bump version and push tag
-        id: create_tag
-        uses: mathieudutour/github-tag-action@v5.4
+      - name: Bump poetry version
+        id: bump_version
         if: ${{ github.ref == 'refs/heads/main' }}
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          create_annotated_tag: true
+        run: |
+          poetry version patch
+          git config user.name github-actions
+          git config user.email github-actions@github.com          
+          git add pyproject.toml
+          git commit -m 'Bump version'
+          VERSION=$(poetry version -s)
+          git tag $VERSION
+          git push --tags
+          echo "::set-output name=VERSION::$VERSION"
 
       - name: Set docker tag(s)
         id: docker_tag
         env:
-          VERSION: ${{ steps.create_tag.outputs.new_tag }}
-          GIT_REF: ${{ github.ref }}
+          VERSION: ${{ steps.bump_version.outputs.VERSION }}
           DOCKER_REPO: ${{ env.DOCKER_REPO }}
           VARIANT: ${{ matrix.variant }}
-        # TODO latest
         run: |
-          DOCKER_TAG="$([ "$VERSION" = "" ] && echo test || echo "$VERSION")"
+          SUFFIX=""
           if [ "$VARIANT" != "" ]; then
-            DOCKER_TAG="$(echo "${DOCKER_TAG}-${VARIANT}")"
+            SUFFIX="-${VARIANT}"
           fi
-          echo "::set-output name=DOCKER_TAGS::${DOCKER_REPO}:${DOCKER_TAG}"
+          DOCKER_TAG="${DOCKER_REPO}:test${SUFFIX}"
+          if [ "$VERSION" != "" ]; then
+            DOCKER_TAG="${DOCKER_TAG},${DOCKER_REPO}:latest${SUFFIX},${DOCKER_REPO}:${VERSION}${SUFFIX}"
+          fi
+          echo "::set-output name=DOCKER_TAGS::${DOCKER_TAG}"
 
       - name: Build and push
         id: docker_build
@@ -89,4 +95,28 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
-          repository: ${{ env.DOCKER_REPO }}
+          repository: ${{ env.DOCKER_REPO }}          
+
+      - name: Build OS image
+        if: ${{ matrix.variant == 'rpi' }}
+        env:
+          DOCKER_REPO: ${{ env.DOCKER_REPO }}
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock
+            -v $(pwd):/build
+            jonoh/rpi-docker-build \
+              --docker-image "${DOCKER_REPO}:test-rpi" \
+              --b-partition \
+              --data-partition
+              /build/flash.img.gz
+
+      - name: Release
+        uses: softprops/action-gh-release@affa18ef97bc9db20076945705aba8c516139abd
+        if: ${{ github.ref == 'refs/heads/main' && matrix.variant == 'rpi' }}
+        with:
+          files: |
+            flash.img.gz
+          tag_name: ${{ steps.bump_version.outputs.VERSION }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
