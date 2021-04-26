@@ -121,7 +121,8 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
-          repository: ${{ env.DOCKER_REPO }}          
+          repository: ${{ env.DOCKER_REPO }}
+          readme-filepath: ./readme.md
 
       - name: Build OS image
         if: ${{ matrix.variant == 'rpi' }}
