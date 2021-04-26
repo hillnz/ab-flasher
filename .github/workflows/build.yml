@@ -13,7 +13,35 @@ env:
   DOCKER_REPO: jonoh/ab-flasher
 
 jobs:
-  main:
+
+  tag:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Bump poetry version
+        if: ${{ github.ref == 'refs/heads/main' }}
+        run: |
+          pip3 install poetry
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          VERSION=$(poetry version -s)
+          if git rev-parse "$VERSION"; then
+            poetry version patch
+            VERSION=$(poetry version -s)
+            git add pyproject.toml
+            git commit -m 'Bump version'
+            git push
+          fi
+          git tag $VERSION
+          git push --tags
+
+  build:
+    needs: version
     runs-on: ubuntu-latest
 
     strategy:
@@ -46,28 +74,21 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
-      - name: Bump poetry version
-        id: bump_version
-        if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Get version
+        id: get_version
         run: |
           pip3 install poetry
-          git config user.name github-actions
-          git config user.email github-actions@github.com
           VERSION=$(poetry version -s)
-          if git rev-parse "$VERSION"; then
-            poetry version patch
-            git add pyproject.toml
-            git commit -m 'Bump version'
-            VERSION=$(poetry version -s)
+          if ! git rev-parse "$VERSION"; then
+            echo "Expected $VERSION to already be tagged!"
+            false
           fi
-          git tag $VERSION
-          git push --tags
-          echo "::set-output name=VERSION::$VERSION"
+          echo "::set-output name=VERSION::$VERSION"          
 
       - name: Set docker tag(s)
         id: docker_tag
         env:
-          VERSION: ${{ steps.bump_version.outputs.VERSION }}
+          VERSION: ${{ steps.get_version.outputs.VERSION }}
           DOCKER_REPO: ${{ env.DOCKER_REPO }}
           VARIANT: ${{ matrix.variant }}
         run: |
@@ -122,6 +143,6 @@ jobs:
         with:
           files: |
             flash.img.gz
-          tag_name: ${{ steps.bump_version.outputs.VERSION }}
+          tag_name: ${{ steps.get_version.outputs.VERSION }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
