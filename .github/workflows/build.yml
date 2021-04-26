@@ -41,7 +41,7 @@ jobs:
           git push --tags
 
   build:
-    needs: version
+    needs: tag
     runs-on: ubuntu-latest
 
     strategy:
