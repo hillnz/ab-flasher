@@ -129,11 +129,16 @@ jobs:
         env:
           DOCKER_REPO: ${{ env.DOCKER_REPO }}
         run: |
+          IMAGE="${DOCKER_REPO}:latest-rpi"
+          if ! docker inspect "$IMAGE" >/dev/null; then
+            echo "Image doesn't already exist locally, pull needed"
+            docker pull "$IMAGE"
+          fi
           docker run --rm \
             -v /var/run/docker.sock:/var/run/docker.sock \
             -v $(pwd):/build \
             jonoh/rpi-docker-build \
-              --docker-image "${DOCKER_REPO}:latest-rpi" \
+              --docker-image "$IMAGE" \
               --b-partition \
               --data-partition \
               /build/flash.img.gz
