@@ -16,12 +16,11 @@ FROM ${BASE_IMAGE}
 RUN apt-get update && apt-get install -y e2fsprogs && \
     pip --version || apt-get install -y python3-pip
 
-WORKDIR /usr/src/ab-flasher
+COPY --from=poetry /tmp/requirements.txt /tmp/requirements.txt
+RUN pip3 install --no-cache-dir -r /tmp/requirements.txt && \
+    rm /tmp/requirements.txt
 
-COPY --from=poetry /tmp/requirements.txt ./requirements.txt
-RUN pip3 install --no-cache-dir -r requirements.txt
-
-COPY . .
+COPY ab-flasher /usr/local/bin/ab-flasher
 
 # If systemd (if a real image) then set it up to run as a service
 COPY ab-flasher.service /tmp
@@ -31,4 +30,4 @@ RUN if [ -d /etc/systemd/system ]; then \
     fi; \
     rm /tmp/ab-flasher.service
 
-ENTRYPOINT [ "python", "ab-flasher", "--host", "/host" ]
+ENTRYPOINT [ "ab-flasher", "--host", "/host" ]

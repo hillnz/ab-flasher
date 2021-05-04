@@ -1,69 +1,43 @@
 #!/usr/bin/env python3
 
-from argparse import ArgumentParser
-from ast import Bytes
-from asyncio import subprocess
+import asyncio
+import errno
+import hashlib
 import logging
 import os
-import asyncio
-from os import makedirs
-import sys
-import errno
-from distutils.version import LooseVersion
-import zlib
-from zlib import decompressobj
-import aiohttp
-from tempfile import NamedTemporaryFile, mkdtemp
-from tarfile import TarFile
-from typing import Coroutine, List, Callable
-from contextlib import asynccontextmanager
-import hashlib
 import re
-import aiofiles
+import sys
+import zlib
+from asyncio import subprocess
+from contextlib import asynccontextmanager
+from distutils.version import LooseVersion
+from functools import wraps
+from os import makedirs
 from shutil import rmtree
+from tempfile import mkdtemp
+from typing import Callable, Coroutine, List, OrderedDict, Tuple
+from itertools import takewhile
+
+import aiofiles
+import aiohttp
+import typer
+from aiohttp.client_exceptions import ClientResponseError
 
 log = logging.getLogger('ab-flasher')
 
-parser = ArgumentParser()
-parser.add_argument('--dry-run', action='store_true', help='Take no actions.')
-parser.add_argument('--no-reboot', action='store_true', help='Don\'t reboot after an update.')
-parser.add_argument('--hash-url', help='URL to a file containing a hash, used to verify the write.')
-parser.add_argument('--hash-type', default='sha256', help='Type of hash contained in the hash file')
-parser.add_argument('--verbose', '-v', action='count', default=0, help='Verbosity of logging. Specify multiple times for more.')
-parser.add_argument('--version-file', default='/.ab_version', help='File to check for volume version (at host)')
-parser.add_argument('--force', action='store_true', help='Assume upgrade is required')
-parser.add_argument('--host', default='/', help='Path to host\'s active partition (usually only needed for Docker)')
-parser.add_argument('new_version', help='New version number (e.g. 1.2.3).')
-parser.add_argument('boot_files_url', help='URL to gzipped boot files.')
-parser.add_argument('boot_partition', help='Partition containing boot files (e.g. sda1)')
-parser.add_argument('os_image_url', help='URL to new gzipped image.')
-parser.add_argument('os_partitions', type=lambda x: x.split(',', maxsplit=2), help='Which two partitions to consider (e.g. sda2,sda3)')
-cli_args = parser.parse_args()
-
-log_level = max(logging.DEBUG, logging.WARNING - (logging.DEBUG * cli_args.verbose))
-logging.basicConfig(level=log_level)
-log.debug(f'Log level is {log_level}')
-
-DRY_RUN = cli_args.dry_run
-HASH_URL = cli_args.hash_url
-HASH_TYPE = cli_args.hash_type
-VERSION_FILE = cli_args.version_file
-FORCE = cli_args.force
-HOST = cli_args.host
-NEW_VERSION = cli_args.new_version
-BOOT_URL = cli_args.boot_files_url
-BOOT_PART = cli_args.boot_partition
-IMG_URL = cli_args.os_image_url
-IMG_PARTS = cli_args.os_partitions
-
-def host(path: str):
-    return os.path.join(HOST, path.lstrip('/'))
+app = typer.Typer(add_completion=False, context_settings={ 'auto_envvar_prefix': 'AB_' })
 
 def die(message: str, code: int=1):
     if message:
         log.critical(message)
     sys.exit(code)
 
+def run_sync(f):
+    @wraps(f)
+    def wrap(*args, **kwargs):
+        return asyncio.run(f(*args, **kwargs))
+    return wrap
+    
 # Unknown if optimal, this is what shutil uses
 COPY_BUFSIZE = 1024 * 1024
 
@@ -89,8 +63,8 @@ async def pipeline(*stage_funcs):
         await stage.aclose()
 
 
-async def get_mounts() -> List[dict]:
-    proc_mounts = host('/proc/mounts')
+async def get_mounts(host) -> List[dict]:
+    proc_mounts = os.path.join(host, 'proc/mounts')
 
     try:
         async with aiofiles.open(proc_mounts, 'r') as f:
@@ -108,6 +82,13 @@ async def get_mounts() -> List[dict]:
 
     return mounts
 
+async def run(program, *args, check=True, stdout=subprocess.PIPE, **kwargs):
+    proc = await asyncio.create_subprocess_exec(program, *args, stdout=stdout, **kwargs)
+    out, _ = await proc.communicate()
+    if check and proc.returncode != 0:
+        raise Exception(f'{program} has returncode {proc.returncode}')
+    if stdout == subprocess.PIPE:
+        return out.decode()
 
 @asynccontextmanager
 async def mount(device, mode='rw'):
@@ -128,25 +109,17 @@ async def mount(device, mode='rw'):
     finally:
         await (await asyncio.create_subprocess_exec('umount', mount_point)).wait()
 
+async def get_device_for_path(path='/'):
+    return await run('findmnt', '-n', '-o', 'SOURCE', path)
 
-async def get_active_partition(version_file: str):
-    mounts = [ (m['path'], m['device']) for m in await get_mounts() ]
-    mounts.sort(key=lambda m: len(m[0]), reverse=True)
+async def get_parent_device(dev_path):
+    return await '/dev/' + run('lsblk', '-no', 'pkname', dev_path)
 
-    # Locate the version file
-    file_dir = os.path.dirname(host(version_file))
-    active_device = None
-    for path, device in mounts:
-        if len(path) > len(file_dir):
-            continue
-        if file_dir[:len(path)] == path:
-            active_device = device
-            break
-    if not active_device:
-        die('Active partition could not be located')
-
-    return active_device
-      
+async def list_partitions(dev_path):
+    output = await run('fdisk', '-l', '-o', 'Device', dev_path)
+    # Take from end until we see the 'Device' header
+    lines = iter(reversed(output.splitlines()))
+    return list(reversed(list(takewhile(lambda l: l != 'Device', lines))))
 
 async def get_http_bytes(url, send_download_bytes: Callable[[bytes], Coroutine]):
     log.debug('get_http_bytes')
@@ -160,8 +133,8 @@ async def get_http_bytes(url, send_download_bytes: Callable[[bytes], Coroutine])
     log.debug(f'Downloaded {bytes} bytes')
 
 
-async def check_version_file(version_file, expected_version):
-    abs_v_file = host(version_file)
+async def check_version_file(host, version_file, expected_version, dry_run: bool):
+    abs_v_file = os.path.join(host, version_file)
     log.debug(f'Expecting version file at {abs_v_file}')
     try:
         async with aiofiles.open(abs_v_file, 'r') as f:
@@ -169,7 +142,7 @@ async def check_version_file(version_file, expected_version):
     except FileNotFoundError:
         log.debug('Current partition has no version, assuming 0')
         current_version = '0'
-        if DRY_RUN:
+        if dry_run:
             log.warning('Dry run - would create version file')
         else:
             log.debug('Creating current version file')
@@ -193,8 +166,8 @@ async def check_version_file(version_file, expected_version):
     return True
 
 
-async def get_partition(part_dev):
-    proc_parts = host('/proc/partitions')
+async def get_partition(host, part_dev):
+    proc_parts = os.path.join(host, '/proc/partitions')
     async with aiofiles.open(proc_parts, 'r') as f:
         await f.readline() # header
         await f.readline() # blank
@@ -206,9 +179,6 @@ async def get_partition(part_dev):
             if part_dev.endswith(name):
                 return name, blocks * 1024
     return None, None
-    
-    # active_dir = os.path.basename(self._host(version_file))
-
 
 # TODO can decompress/write run in a thread. Any real performance gains?
 async def decompress(send_raw_bytes):
@@ -275,10 +245,10 @@ async def untar(out_dir):
         os.rmdir(tmp)
 
 
-async def digest_file(hasher, file_path: str, length: int):
+async def digest_file(hasher, file_path: str, length: int = 0):
     async with aiofiles.open(file_path, 'rb') as f:
         bytes_remaining = length
-        while bytes_remaining > 0:
+        while bytes_remaining > 0 or length == 0:
             chunk = await f.read(min(COPY_BUFSIZE, bytes_remaining))
             if not chunk:
                 break
@@ -286,31 +256,177 @@ async def digest_file(hasher, file_path: str, length: int):
             bytes_remaining -= len(chunk)
     return hasher.hexdigest()
 
+def deref_partuuid(partuuid):
+    link = '/dev/disk/by-partuuid/' + partuuid
+    try:
+        deref = os.readlink(link)
+        dev = os.path.join(os.path.dirname(link), deref)
+        return os.path.basename(dev)
+    except OSError:
+        return None
 
-async def main():
-    def host(path: str):
-        return os.path.join(HOST, path.lstrip('/'))
+def get_partuuid(partition):
+    dev_links = os.listdir('/dev/disk/by-partuuid')
+    for link in dev_links:
+        partuuid = os.path.basename(link)
+        if deref_partuuid(partuuid) == partition:
+            return partuuid
 
-    if FORCE:
+async def update_fstab(root_dev):
+    # Assumption: old and new fstabs both specify all desired partition mounts
+    # Anything else the new root will have to work out for itself on boot
+    async with mount(root_dev) as mount_point:
+        old_mounts = {}
+        async with aiofiles.open('/etc/fstab', 'r') as f:
+            async for line in f:
+                if line and not line.strip().startswith('#'):
+                    dev, mnt, _ = tuple(line.split(maxsplit=2))
+                    if dev.startswith('PARTUUID'):
+                        dev = deref_partuuid(dev)
+                    if dev:
+                        old_mounts[mnt] = dev
+
+        fstab_path = os.path.join(mount_point, 'etc', 'fstab')
+        new_fstab = ''
+        async with aiofiles.open(fstab_path, 'r') as f:
+            async for line in f:
+                if line.strip().startswith('#') or not line.strip():
+                    new_fstab += line
+                else:
+                    _, mnt, remainder = tuple(line.split(maxsplit=2))
+                    if mnt in old_mounts:
+                        dev = root_dev if mnt == '/' else old_mounts[mnt]
+                        dev = get_partuuid(dev) or dev
+                        new_fstab += [ f'PARTUUID={dev}', mnt, remainder ].join(' ') + '\n'
+                    else:
+                        new_fstab += line
+        async with aiofiles.open(fstab_path, 'w') as f:
+            await f.write(new_fstab)
+
+def parse_cmdline(cmdline: str):
+    return OrderedDict([ 
+        tuple(kv.split('=', maxsplit=1)) if '=' in kv else (kv, '') 
+        for kv in cmdline.strip().split() 
+    ])
+
+def format_cmdline(items: dict):
+    return ' '.join(( 
+        k if v == '' else f'{k}={v}' 
+        for k, v in items.items() 
+    ))
+
+async def set_cmdline_root(cmdline_path, root_partition):
+    # Update cmdline
+    part_uuid = get_partuuid(root_partition)
+    async with aiofiles.open(cmdline_path, 'r') as f:
+        cmdline = parse_cmdline(f.readline())
+    cmdline['root'] = f'PARTUUID={part_uuid}'
+    async with aiofiles.open(cmdline_path, 'w') as f:
+        f.write(format_cmdline(cmdline))
+
+async def get_cmdline_root(cmdline_path):
+    async with aiofiles.open(cmdline_path, 'r') as f:
+        cmdline = parse_cmdline(f.readline())
+    root = cmdline['root']
+    assert root.startswith('PARTUUID=')
+    _, part_uuid = tuple(root.split('='))
+    return deref_partuuid(part_uuid)
+
+async def set_boot_prefix(boot_dir, boot_prefix):
+    new_config = ''
+    config_txt_path = os.path.join(boot_dir, 'config.txt')
+    os_prefix = f'os_prefix={boot_prefix.rstrip("/")}/\n'
+    written = False
+    async with open(config_txt_path, 'r') as f:
+        async for line in f:
+            k_v: List[str] = line.split(maxsplit=1)
+            if len(k_v) != 2:
+                new_config += k_v
+            else:
+                k = k_v[0].lstrip('#')
+                if k == 'os_prefix':
+                    new_config += os_prefix
+                    written = True
+                else:
+                    new_config += k_v
+    if not written:
+        new_config += os_prefix
+    async with open(config_txt_path, 'w') as f:
+        await f.write(new_config)
+
+async def hashsum_check(hash_name, dir, sha256_file):
+    try:
+        async with aiofiles.open(sha256_file) as f:
+            async for line in f:
+                digest, path = tuple(line.strip().split())
+                if not re.match(r'[0-9A-Za-z]+', digest):
+                    die(f'Value {digest} is not a hash. Expecting hex.')                
+                actual_digest = await digest_file(hashlib.new(hash_name), os.path.join(dir, path))
+                if digest.lower() != actual_digest.lower():
+                    die(f'File {path} hash verification failed')
+    except FileNotFoundError:
+        die('One of the required files is missing')
+
+HASH_URL_DEFAULT = '<OS_IMAGE_URL>.<hash-type>'
+BOOT_HASH_URL_DEFAULT = '<boot_files_url>.<hash-type>'
+
+@app.command(context_settings={ 'auto_envvar_prefix': 'AB' })
+@run_sync
+async def main(
+    boot_files_url: str = typer.Option(None, help='URL to tar/gzipped boot files (or skip boot files update if not set).'),
+    boot_files_hash_url: str = typer.Option(BOOT_HASH_URL_DEFAULT, help='URL to hash file for boot files.'),
+    hash_url: str = typer.Option(HASH_URL_DEFAULT, help='URL to a file containing a hash, used to verify the write.'),
+    hash_type: str = typer.Option('sha256', help='Type of hash contained in the hash file'),
+    host: str = typer.Option('/', help='Path to host\'s active root (usually only needed for Docker)'),
+    version_file: str = typer.Option('/.ab_version', help='File to check for existing version (at host)'),
+    reboot: bool = typer.Option(True, help='Reboot after an update.'),
+    boot_partition = typer.Option(1, help='Partition number containing boot files'),
+    os_partitions: Tuple[int, int] = typer.Option((2, 3), help='Which two OS partition numbers to consider for flashing'),
+    force: bool = typer.Option(False, help='Assume upgrade is required.'),
+    dry_run: bool = typer.Option(False, help='Take no actions.'),
+    verbose: int = typer.Option(0, '-v', count=True, help='Verbosity of logging. Specify multiple times for more.'),
+    os_image_url: str = typer.Argument(..., envvar='AB_OS_IMAGE_URL', help='URL to new gzipped image.'),
+    new_version: str = typer.Argument(None, envvar='AB_NEW_VERSION', help='New version number (e.g. 1.2.3).'),
+):
+    log_level = max(logging.DEBUG, logging.WARNING - (logging.DEBUG * verbose))
+    logging.basicConfig(level=log_level)
+    log.debug(f'Debug logging is active')
+
+    if not force and not new_version:
+        log.critical('You must specify a NEW_VERSION unless you --force.')
+        return 1
+
+    if force:
         log.warning('Skipping version check due to "force" flag')
-    elif not await check_version_file(VERSION_FILE, NEW_VERSION):
-        die('No upgrade is required', 0)
+    elif not await check_version_file(host, version_file, new_version, dry_run):
+        log.info('No upgrade is required')
+        return
 
-    log.debug(f'Upgrading to {NEW_VERSION}')
-
-    allowed_partitions = [ '/dev/' + p for p in IMG_PARTS ]
-    active_part = await get_active_partition(VERSION_FILE)
+    os_partitions = sorted(os_partitions)
+    active_part = await get_device_for_path(host)
+    active_partuuid = await get_partuuid(active_part)
+    disk_dev = await get_parent_device(active_part)
+    disk_parts = await list_partitions(disk_dev)
+    try:
+        allowed_partitions = [ disk_parts[p + 1] for p in os_partitions ]
+    except IndexError:
+        die(f'Couldn\'t find OS partitions. Review the value for --os-partitions.')
     log.info(f'Active partition is {active_part}')
     if not active_part in allowed_partitions:
         die(f'Active partition ({active_part}) is not in the provided list ({",".join(allowed_partitions)}).')
 
-    inactive_part = next(( p for p in allowed_partitions if p != active_part ), '')
+    letters = 'ab'
+    boot_prefix = 'a'
+    for n, p in enumerate(allowed_partitions):
+        if p != active_part:
+            boot_prefix = letters[n]
+            inactive_part = p
     part_name, part_size = await get_partition(inactive_part)
     if not part_name:
         die(f'Proposed inactive partition ({inactive_part}) doesn\'t exist')
     log.info(f'{part_name} will be flashed.')
     part_size = int(part_size)
-    if DRY_RUN:
+    if dry_run:
         log.warning('Dry run - will write to /dev/null')
         part_name = 'null'
         part_size = sys.maxsize
@@ -329,48 +445,76 @@ async def main():
 
         write_task = asyncio.create_task(
             pipeline(
-                lambda n: get_http_bytes(IMG_URL, n),
-                lambda n: decompress(n),
+                lambda n: get_http_bytes(os_image_url, n),
+                decompress,
                 count_bytes,
                 lambda: write_to_partition(partition_to_flash, max_flash_bytes)
             )
         )
-        if HASH_URL:
-            hasher = hashlib.new(HASH_TYPE)
-            async with aiohttp.request('GET', HASH_URL, raise_for_status=True) as resp:
+        
+        default_hash_url = hash_url == HASH_URL_DEFAULT
+        if default_hash_url:
+            hash_url = os_image_url + '.' + hash_type
+        hasher = hashlib.new(hash_type)
+        try:
+            async with aiohttp.request('GET', hash_url, raise_for_status=True) as resp:
                 expected_hash = (await resp.content.read(hasher.digest_size * 2)).decode()
             if not re.match(r'[0-9A-Za-z]+', expected_hash):
-                die(f'Value fetched from {HASH_URL} is not a hash. Expecting hex.')
+                die(f'Value fetched from {hash_url} is not a hash. Expecting hex.')
             await write_task
             log.info(f'Parition write done, starting verification (expecting {expected_hash})')
             actual_hash = await digest_file(hasher, partition_to_flash, bytes_written)
             if expected_hash != actual_hash:
                 die(f'Written OS data does not match fetched hash ({actual_hash})')
             log.info('Write verification completed successfully')
-        else:
-            log.warning('Skipping write verification as no hash url specified')
-            await write_task
+        except ClientResponseError:
+            if default_hash_url:
+                log.warning('Skipping write verification as no hash file could be fetched')
+                await write_task
+            else:
+                raise
+
         log.debug('Expanding written filesystem')
         r2proc = await asyncio.create_subprocess_exec('resize2fs', partition_to_flash)
         if await r2proc.wait() != 0:
             die('Expanding filesystem failed')
+        await update_fstab(part_name)
 
     async def write_boot():
-        async with mount('/dev/' + BOOT_PART) as mountpoint:
-            INACTIVE_BOOT = os.path.join(mountpoint, 'inactive')
+        if not boot_files_url:
+            log.warning('No boot files specified, skipping update')
+            return
+
+        # TODO smarter partition detection
+        async with mount(disk_dev + boot_partition) as mountpoint:
+            INACTIVE_BOOT = os.path.join(mountpoint, boot_prefix)
+            rmtree(INACTIVE_BOOT, ignore_errors=True)
             os.makedirs(INACTIVE_BOOT, exist_ok=True)
 
             try:
                 await pipeline(
-                    lambda n: get_http_bytes(BOOT_URL, n),
+                    lambda n: get_http_bytes(boot_files_url, n),
+                    decompress,
                     lambda: untar(os.path.join(mountpoint, INACTIVE_BOOT))
                 )
             except:
                 rmtree(INACTIVE_BOOT)
                 raise
-        log.info('Wrote boot files')
+            log.info('Wrote boot files')
+            await set_cmdline_root(os.path.join(INACTIVE_BOOT, 'cmdline.txt'), part_name)
+            log.info('Verifying boot files')
+            await hashsum_check(hash_type, INACTIVE_BOOT, )
 
     await asyncio.wait([ write_os(), write_boot() ])
+    
+    log.info('All was successful. Configuring boot loader.')
 
+    # The point of no return
+    async with mount(disk_dev + boot_partition) as mountpoint:
+        await set_boot_prefix(mountpoint, 'new/')
 
-asyncio.run(main())
+    if reboot:
+        log.info('Rebooting')
+        await run('reboot')
+
+app()
