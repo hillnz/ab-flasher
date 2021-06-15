@@ -20,14 +20,16 @@ COPY --from=poetry /tmp/requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir -r /tmp/requirements.txt && \
     rm /tmp/requirements.txt
 
-COPY ab-flasher /usr/local/bin/ab-flasher
-
-# If systemd (if a real image) then set it up to run as a service
-COPY ab-flasher.service /tmp
+# If systemd (if a real image) then set up partitioner and service
+COPY bootstrap /first_boot
 RUN if [ -d /etc/systemd/system ]; then \
-        cp ab-flasher.service /etc/systemd/system/ab-flasher.service && \
-        systemctl enable ab-flasher.service; \
-    fi; \
-    rm /tmp/ab-flasher.service
+        mv /first_boot/ab-flasher.service /etc/systemd/system/ab-flasher.service && \
+        systemctl enable ab-flasher.service && \
+        apt-get update && apt-get install -y python3-parted && \
+        sed -r -i 's! init=[^ ]+( |$)! init=/first_boot/first_boot.sh !' /boot/cmdline.txt; \
+    else \
+        rm -rf /first_boot; \
+    fi
 
+COPY ab-flasher /usr/local/bin/ab-flasher
 ENTRYPOINT [ "ab-flasher", "--host", "/host" ]

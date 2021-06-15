@@ -6,22 +6,25 @@ import hashlib
 import logging
 import os
 import re
+import shutil
 import sys
 import zlib
 from asyncio import subprocess
 from contextlib import asynccontextmanager
 from distutils.version import LooseVersion
 from functools import wraps
+from glob import glob
+from itertools import takewhile
 from os import makedirs
 from shutil import rmtree
 from tempfile import mkdtemp
 from typing import Callable, Coroutine, List, OrderedDict, Tuple
-from itertools import takewhile
 
 import aiofiles
 import aiohttp
 import typer
 from aiohttp.client_exceptions import ClientResponseError
+import shlex
 
 log = logging.getLogger('ab-flasher')
 
@@ -40,6 +43,13 @@ def run_sync(f):
     
 # Unknown if optimal, this is what shutil uses
 COPY_BUFSIZE = 1024 * 1024
+
+RE_OS_FILES = re.compile('(' + ')|('.join([
+    r'/kernel[^/]*\.img$',
+    r'/init[^/]*$',
+    r'/cmdline.txt$',
+    r'\.dtbo?$'
+]) + ')')
 
 async def pipeline(*stage_funcs):
     # Build chain, passing lower stages to higher ones
@@ -83,16 +93,17 @@ async def get_mounts(host) -> List[dict]:
     return mounts
 
 async def run(program, *args, check=True, stdout=subprocess.PIPE, **kwargs):
+    log.debug(f'Running: {program} {" ".join([ shlex.quote(a) for a in args ])}')
     proc = await asyncio.create_subprocess_exec(program, *args, stdout=stdout, **kwargs)
     out, _ = await proc.communicate()
     if check and proc.returncode != 0:
         raise Exception(f'{program} has returncode {proc.returncode}')
     if stdout == subprocess.PIPE:
-        return out.decode()
+        return out.decode().strip()
 
 @asynccontextmanager
-async def mount(device, mode='rw'):
-    mounts = await get_mounts()
+async def mount(host, device, mode='rw'):
+    mounts = await get_mounts(host)
     mount = next(( m for m in mounts if m['device'] == device and mode in m['options'] ), None)
     if mount:
         yield mount['path']
@@ -113,7 +124,7 @@ async def get_device_for_path(path='/'):
     return await run('findmnt', '-n', '-o', 'SOURCE', path)
 
 async def get_parent_device(dev_path):
-    return await '/dev/' + run('lsblk', '-no', 'pkname', dev_path)
+    return '/dev/' + (await run('lsblk', '-no', 'pkname', dev_path))
 
 async def list_partitions(dev_path):
     output = await run('fdisk', '-l', '-o', 'Device', dev_path)
@@ -272,35 +283,28 @@ def get_partuuid(partition):
         if deref_partuuid(partuuid) == partition:
             return partuuid
 
-async def update_fstab(root_dev):
-    # Assumption: old and new fstabs both specify all desired partition mounts
+async def update_fstab(host, root_dev):
+    # Assumption: old fstab specifies all desired partition mounts
     # Anything else the new root will have to work out for itself on boot
-    async with mount(root_dev) as mount_point:
-        old_mounts = {}
-        async with aiofiles.open('/etc/fstab', 'r') as f:
-            async for line in f:
-                if line and not line.strip().startswith('#'):
-                    dev, mnt, _ = tuple(line.split(maxsplit=2))
-                    if dev.startswith('PARTUUID'):
-                        dev = deref_partuuid(dev)
-                    if dev:
-                        old_mounts[mnt] = dev
 
-        fstab_path = os.path.join(mount_point, 'etc', 'fstab')
+    async with mount(host, '/dev/' + root_dev) as mount_point:
+        new_fstab_path = os.path.join(mount_point, 'etc', 'fstab')
+        os.unlink(new_fstab_path)
+        shutil.copyfile('/etc/fstab', new_fstab_path)
+        
         new_fstab = ''
-        async with aiofiles.open(fstab_path, 'r') as f:
+        async with aiofiles.open(new_fstab_path, 'r') as f:
             async for line in f:
                 if line.strip().startswith('#') or not line.strip():
                     new_fstab += line
                 else:
                     _, mnt, remainder = tuple(line.split(maxsplit=2))
-                    if mnt in old_mounts:
-                        dev = root_dev if mnt == '/' else old_mounts[mnt]
-                        dev = get_partuuid(dev) or dev
-                        new_fstab += [ f'PARTUUID={dev}', mnt, remainder ].join(' ') + '\n'
+                    if mnt == '/':
+                        dev = get_partuuid(root_dev)
+                        new_fstab += ' '.join([ f'PARTUUID={dev}', mnt, remainder ])
                     else:
                         new_fstab += line
-        async with aiofiles.open(fstab_path, 'w') as f:
+        async with aiofiles.open(new_fstab_path, 'w') as f:
             await f.write(new_fstab)
 
 def parse_cmdline(cmdline: str):
@@ -319,40 +323,78 @@ async def set_cmdline_root(cmdline_path, root_partition):
     # Update cmdline
     part_uuid = get_partuuid(root_partition)
     async with aiofiles.open(cmdline_path, 'r') as f:
-        cmdline = parse_cmdline(f.readline())
+        cmdline = parse_cmdline(await f.readline())
     cmdline['root'] = f'PARTUUID={part_uuid}'
     async with aiofiles.open(cmdline_path, 'w') as f:
-        f.write(format_cmdline(cmdline))
+        await f.write(format_cmdline(cmdline))
 
 async def get_cmdline_root(cmdline_path):
     async with aiofiles.open(cmdline_path, 'r') as f:
-        cmdline = parse_cmdline(f.readline())
+        cmdline = parse_cmdline(await f.readline())
     root = cmdline['root']
     assert root.startswith('PARTUUID=')
     _, part_uuid = tuple(root.split('='))
     return deref_partuuid(part_uuid)
 
-async def set_boot_prefix(boot_dir, boot_prefix):
+
+async def open_boot_config(boot_dir, read=[], write={}):
+    read_items = {}
     new_config = ''
     config_txt_path = os.path.join(boot_dir, 'config.txt')
-    os_prefix = f'os_prefix={boot_prefix.rstrip("/")}/\n'
-    written = False
-    async with open(config_txt_path, 'r') as f:
+    write_needed = bool(write)
+    async with aiofiles.open(config_txt_path, 'r') as f:
         async for line in f:
-            k_v: List[str] = line.split(maxsplit=1)
+            k_v: List[str] = line.strip().split('=', maxsplit=1)
             if len(k_v) != 2:
-                new_config += k_v
+                new_config += line
             else:
-                k = k_v[0].lstrip('#')
-                if k == 'os_prefix':
-                    new_config += os_prefix
-                    written = True
+                k, v = k_v
+                if k in read:
+                    read_items[k] = v
+                k = k.lstrip('#')
+                if k in write:
+                    new_config += f'{k}={write[k]}\n'
+                    del write[k]
                 else:
-                    new_config += k_v
-    if not written:
-        new_config += os_prefix
-    async with open(config_txt_path, 'w') as f:
-        await f.write(new_config)
+                    new_config += line
+    if write:
+        new_config += '\n'
+        for k, v in write.items():
+            new_config += f'{k}={write[k]}\n'
+    if write_needed:
+        async with aiofiles.open(config_txt_path, 'w') as f:
+            await f.write(new_config)
+    return read_items
+
+
+async def move_firmware_files(prefix_dir, boot_dir):
+    """Move anything not "OS" (kernels, initramfs, cmdline.txt, .dtbs and overlays)"""
+    not_os_files = [ 
+        f for f in glob(os.path.join(prefix_dir, '**', '**'), recursive=True)
+        if not RE_OS_FILES.search(f) and os.path.isfile(f)
+    ]
+    for f in not_os_files:
+        rel_path = os.path.relpath(f, prefix_dir)
+        dest = os.path.join(boot_dir, rel_path)
+        dir_name = os.path.dirname(dest)
+        makedirs(dir_name, exist_ok=True)
+        os.rename(f, dest)
+        await asyncio.sleep(0)
+
+
+async def copy_os_files(source_dir, dest_dir):
+    os_files = [
+        f for f in glob(os.path.join(source_dir, '**', '**'), recursive=True)
+        if os.path.isfile(f) and RE_OS_FILES.search(f)
+    ]
+    for f in os_files:
+        rel_path = os.path.relpath(f, source_dir)
+        dest = os.path.join(dest_dir, rel_path)
+        dir_name = os.path.dirname(dest)
+        makedirs(dir_name, exist_ok=True)
+        shutil.copyfile(f, dest)
+        await asyncio.sleep(0)
+
 
 async def hashsum_check(hash_name, dir, sha256_file):
     try:
@@ -367,8 +409,8 @@ async def hashsum_check(hash_name, dir, sha256_file):
     except FileNotFoundError:
         die('One of the required files is missing')
 
-HASH_URL_DEFAULT = '<OS_IMAGE_URL>.<hash-type>'
-BOOT_HASH_URL_DEFAULT = '<boot_files_url>.<hash-type>'
+HASH_URL_DEFAULT = '<OS_IMAGE_URL>.replace(.gz, .<hash_type>)'
+BOOT_HASH_URL_DEFAULT = '<boot_files_url>.replace(.tar.gz, <hash_type>)'
 
 @app.command(context_settings={ 'auto_envvar_prefix': 'AB' })
 @run_sync
@@ -404,16 +446,16 @@ async def main(
 
     os_partitions = sorted(os_partitions)
     active_part = await get_device_for_path(host)
-    active_partuuid = await get_partuuid(active_part)
     disk_dev = await get_parent_device(active_part)
     disk_parts = await list_partitions(disk_dev)
     try:
-        allowed_partitions = [ disk_parts[p + 1] for p in os_partitions ]
+        allowed_partitions = [ disk_parts[p - 1] for p in os_partitions ]
     except IndexError:
         die(f'Couldn\'t find OS partitions. Review the value for --os-partitions.')
     log.info(f'Active partition is {active_part}')
     if not active_part in allowed_partitions:
         die(f'Active partition ({active_part}) is not in the provided list ({",".join(allowed_partitions)}).')
+    boot_dev = disk_parts[boot_partition - 1]
 
     letters = 'ab'
     boot_prefix = 'a'
@@ -421,7 +463,7 @@ async def main(
         if p != active_part:
             boot_prefix = letters[n]
             inactive_part = p
-    part_name, part_size = await get_partition(inactive_part)
+    part_name, part_size = await get_partition(host, inactive_part)
     if not part_name:
         die(f'Proposed inactive partition ({inactive_part}) doesn\'t exist')
     log.info(f'{part_name} will be flashed.')
@@ -435,6 +477,8 @@ async def main(
     max_flash_bytes = part_size
 
     async def write_os():
+        nonlocal hash_url
+
         bytes_written = 0
         async def count_bytes(send):
             nonlocal bytes_written
@@ -454,7 +498,7 @@ async def main(
         
         default_hash_url = hash_url == HASH_URL_DEFAULT
         if default_hash_url:
-            hash_url = os_image_url + '.' + hash_type
+            hash_url = os_image_url.replace('.gz', f'.{hash_type}')
         hasher = hashlib.new(hash_type)
         try:
             async with aiohttp.request('GET', hash_url, raise_for_status=True) as resp:
@@ -475,46 +519,73 @@ async def main(
                 raise
 
         log.debug('Expanding written filesystem')
-        r2proc = await asyncio.create_subprocess_exec('resize2fs', partition_to_flash)
-        if await r2proc.wait() != 0:
-            die('Expanding filesystem failed')
-        await update_fstab(part_name)
+        await run('e2fsck', '-fp', partition_to_flash)
+        await run('resize2fs', partition_to_flash)
+        await update_fstab(host, part_name)
 
     async def write_boot():
-        if not boot_files_url:
-            log.warning('No boot files specified, skipping update')
-            return
+        nonlocal boot_files_hash_url
 
         # TODO smarter partition detection
-        async with mount(disk_dev + boot_partition) as mountpoint:
+        async with mount(host, boot_dev) as mountpoint:
             INACTIVE_BOOT = os.path.join(mountpoint, boot_prefix)
             rmtree(INACTIVE_BOOT, ignore_errors=True)
             os.makedirs(INACTIVE_BOOT, exist_ok=True)
+            if boot_files_url:
+                try:
+                    await pipeline(
+                        lambda n: get_http_bytes(boot_files_url, n),
+                        decompress,
+                        lambda: untar(os.path.join(mountpoint, INACTIVE_BOOT))
+                    )
+                except:
+                    rmtree(INACTIVE_BOOT)
+                    raise
+                log.info('Wrote boot files')
 
-            try:
-                await pipeline(
-                    lambda n: get_http_bytes(boot_files_url, n),
-                    decompress,
-                    lambda: untar(os.path.join(mountpoint, INACTIVE_BOOT))
-                )
-            except:
-                rmtree(INACTIVE_BOOT)
-                raise
-            log.info('Wrote boot files')
-            await set_cmdline_root(os.path.join(INACTIVE_BOOT, 'cmdline.txt'), part_name)
-            log.info('Verifying boot files')
-            await hashsum_check(hash_type, INACTIVE_BOOT, )
+                default_boot_hash = boot_files_hash_url == BOOT_HASH_URL_DEFAULT
+                if default_boot_hash:
+                    boot_files_hash_url = boot_files_url.replace('.tar.gz', '.' + hash_type)
+                tmpdir = mkdtemp()
+                hash_file = os.path.join(tmpdir, 'hashes')
+                try:
+                    try:
+                        async with aiofiles.open(hash_file, 'wb') as f:
+                            await get_http_bytes(boot_files_hash_url, f.write)
+                        log.info('Verifying boot files')
+                        await hashsum_check(hash_type, INACTIVE_BOOT, hash_file)
+                    except ClientResponseError:
+                        if not default_boot_hash:
+                            die('Could not fetch specified boot_files_hash_url')
+                finally:
+                    rmtree(tmpdir)
+            else:
+                log.warning('No boot files specified, skipping download')
+                # Build from existing boot files - from root plus current active
+                boot_config = await open_boot_config(mountpoint, ['os_prefix'])
+                active_boot = boot_config.get('os_prefix', '').rstrip('/')
+                if os.path.isdir(active_boot):
+                    log.info('os_prefix is currently configured - will copy this for use')
+                    rmtree(INACTIVE_BOOT)
+                    shutil.copytree(active_boot, INACTIVE_BOOT)
+                else:
+                    await copy_os_files(mountpoint, INACTIVE_BOOT)
 
-    await asyncio.wait([ write_os(), write_boot() ])
+        await set_cmdline_root(os.path.join(INACTIVE_BOOT, 'cmdline.txt'), part_name)
+
+    for t in asyncio.as_completed([write_os(), write_boot()]):
+        await t
     
     log.info('All was successful. Configuring boot loader.')
 
     # The point of no return
-    async with mount(disk_dev + boot_partition) as mountpoint:
-        await set_boot_prefix(mountpoint, 'new/')
+    async with mount(host, boot_dev) as mountpoint:
+        await move_firmware_files(boot_prefix, mountpoint)
+        await open_boot_config(mountpoint, write={'os_prefix': boot_prefix + '/'})
 
     if reboot:
         log.info('Rebooting')
         await run('reboot')
 
-app()
+if __name__ == '__main__':
+    app()

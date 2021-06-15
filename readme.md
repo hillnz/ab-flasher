@@ -21,16 +21,12 @@ Your Raspberry Pi should contain the standard boot partition, and two ext4 parti
 
 ### Bootstrap
 
-If you need a bootstrap image to get started, you can flash with an image containing ab-flasher from the [Releases](https://github.com/hillnz/ab-flasher/releases/latest).
+If you need a bootstrap image, you can flash with an image containing ab-flasher from the [Releases](https://github.com/hillnz/ab-flasher/releases/latest).
 This image contains the boot partition, two OS partitions, and a data partition. You can flash it with the usual tools (dd, Raspberry Pi Imager, etc).
 
-After flashing, create `ab-flasher.env` in the data partition. This file may contain any of the arguments'/options' environment variable equivalents (see [Usage](#usage)). For example, at a minimum:
-```
-AB_OS_IMAGE_URL=https://github.com/hillnz/rpi-image-base/releases/latest/download/os.img.gz
-AB_FORCE=true
-```
+After flashing, run `./config.py`. If you don't already have one, this will create a `.env` file that you can fill in, then run `./config.py` again. This will create configuration on the data partition.
 
-On boot, the partitions will be expanded and ab-flasher will run.
+You're ready to boot the Pi. On boot, the partitions will be expanded and ab-flasher will run.
 
 ### Updates
 

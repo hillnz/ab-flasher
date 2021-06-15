@@ -51,7 +51,7 @@ jobs:
           - base: python:3.9.4
             # Only works on rpi, but amd64 can be useful for testing
             platforms: linux/amd64,linux/arm/v7,linux/arm64
-          - base: jonoh/raspberry-pi-os:2021.3.4
+          - base: jonoh/rpi-base:v0.0.8
             variant: rpi
             platforms: linux/arm/v7
           
