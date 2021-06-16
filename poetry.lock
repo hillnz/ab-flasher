@@ -65,7 +65,7 @@ python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*"
 
 [[package]]
 name = "humanize"
-version = "3.8.0"
+version = "3.9.0"
 description = "Python humanize utilities"
 category = "dev"
 optional = false
@@ -157,7 +157,7 @@ multidict = ">=4.0"
 [metadata]
 lock-version = "1.1"
 python-versions = ">=3.8,<3.10"
-content-hash = "de11fc3464193d9cc684499273cb0be4b96a72e4860bae80a919e4dfb1379264"
+content-hash = "dec0cb84a47d8507df042b97d4d119eff50e2dc46ad2be8b4a629cb232341d34"
 
 [metadata.files]
 aiofiles = [
@@ -220,8 +220,8 @@ click = [
     {file = "click-7.1.2.tar.gz", hash = "sha256:d2b5255c7c6349bc1bd1e59e08cd12acbbd63ce649f2588755783aa94dfb6b1a"},
 ]
 humanize = [
-    {file = "humanize-3.8.0-py3-none-any.whl", hash = "sha256:37711ee4f10525fa94e0133353d3c20888dd3b78570ec6e53005ba04f75fc3b8"},
-    {file = "humanize-3.8.0.tar.gz", hash = "sha256:bd6e8aa313ca07ed882695f89e4bf09e05049d2d489d4e2bf34b74c0da8d1613"},
+    {file = "humanize-3.9.0-py3-none-any.whl", hash = "sha256:2cc4f7d2f5994ea9fcddd4b681ddea9abd23baa8cc64bd0af041a0162636f31c"},
+    {file = "humanize-3.9.0.tar.gz", hash = "sha256:892a5b7b87763c4c6997a58382c2b1f4614048a2e01c23ef1bb0456e6f9d4d5d"},
 ]
 idna = [
     {file = "idna-3.2-py3-none-any.whl", hash = "sha256:14475042e284991034cb48e06f6851428fb14c4dc953acd9be9a5e95c7b6dd7a"},
