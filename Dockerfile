@@ -20,9 +20,9 @@ COPY --from=poetry /tmp/requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir -r /tmp/requirements.txt && \
     rm /tmp/requirements.txt
 
-# If systemd (if a real image) then set up partitioner and service
+# If Raspberry Pi OS then set up partitioner and service
 COPY bootstrap /first_boot
-RUN if [ -d /etc/systemd/system ]; then \
+RUN if grep Rasp /etc/os-release; then \
         mv /first_boot/ab-flasher.service /etc/systemd/system/ab-flasher.service && \
         systemctl enable ab-flasher.service && \
         apt-get update && apt-get install -y python3-parted && \
