@@ -1,0 +1,19 @@
+# This is used by the Dockerfile if systemd is detected
+# (i.e. if being used for a real image)
+[Unit]
+Description=ab-flasher
+After=network.target
+
+[Service]
+EnvironmentFile=-/data/ab-flasher.env
+# ./ab-flasher --help | grep -oP AB_[_A-Z]+ | tr '\n' ' '
+PassEnvironment=AB_OS_IMAGE_URL AB_NEW_VERSION AB_BOOT_FILES_URL AB_HASH_URL AB_HASH_TYPE AB_HOST AB_VERSION_FILE AB_REBOOT AB_BOOT_PARTITION AB_OS_PARTITIONS AB_FORCE AB_DRY_RUN AB_VERBOSE
+ExecStart=/usr/local/bin/ab-flasher 
+WorkingDirectory=/
+StandardOutput=inherit
+StandardError=inherit
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target

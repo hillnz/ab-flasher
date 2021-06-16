@@ -6,91 +6,123 @@ Simple tool to implement an A/B partition image update strategy for a Raspberry 
 
 ## What it does
 
-ab-flasher updates a device in place, using what is sometimes known as a double copy, dual copy, or A/B strategy. This is where the device has two OS partitions but only one is active. Updates are done by flashing the inactive partition, then the bootloader is updated to switch to the new version.
+ab-flasher updates a Raspberry Pi in place, using what is sometimes known as a double copy, dual copy, or A/B strategy. This is where the device has two OS partitions but only one is active. Updates are done by flashing the inactive partition, then the bootloader is updated to switch to the new version.
 
 When you run ab-flasher:, it:
-1. Reads `.ab_version`.
-2. Checks if active (booted) partition's version is less than desired (else stop).
-3. Downloads the new image, extracting/writing it to the inactive partition.
-4. Checksums the inactive partition to confirm successful write.
-5. Configures the bootloader to use the new (currently inactive) partition.
+1. Checks if active (booted) partition's version is less than desired (else stop).
+2. Downloads the new image, extracting/writing it to the inactive partition.
+3. Checksums the inactive partition to confirm successful write.
+4. Configures the bootloader to use the new (currently inactive) partition.
+5. Reboots
 
-## Usage
+## How to use it
 
-usage: ab-flasher [-h] [--dry-run] [--no-reboot] [--hash-url HASH_URL]
-                  [--hash-type HASH_TYPE] [--verbose]
-                  [--version-file VERSION_FILE] [--force] [--host HOST]
-                  new_version boot_files_url boot_partition os_image_url
-                  os_partitions
+Your Raspberry Pi should contain the standard boot partition, and two ext4 partitions for the OS.
 
-positional arguments:
-  new_version           New version number (e.g. 1.2.3).
-  boot_files_url        URL to gzipped boot files.
-  boot_partition        Partition containing boot files (e.g. sda1)
-  os_image_url          URL to new gzipped image.
-  os_partitions         Which two partitions to consider (e.g. sda2,sda3)
+### Bootstrap
 
-optional arguments:
-  -h, --help            show this help message and exit
-  --dry-run             Take no actions.
-  --no-reboot           Don't reboot after an update.
-  --hash-url HASH_URL   URL to a file containing a hash, used to verify the
-                        write.
-  --hash-type HASH_TYPE
-                        Type of hash contained in the hash file
-  --verbose, -v         Verbosity of logging. Specify multiple times for more.
-  --version-file VERSION_FILE
-                        File to check for volume version (at host)
-  --force               Assume upgrade is required
-  --host HOST           Path to host's active partition (usually only needed
-                        for Docker)
+If you need a bootstrap image, you can flash with an image containing ab-flasher from the [Releases](https://github.com/hillnz/ab-flasher/releases/latest).
+This image contains the boot partition, two OS partitions, and a data partition. You can flash it with the usual tools (dd, Raspberry Pi Imager, etc).
+
+After flashing, run `./config.py`. If you don't already have one, this will create a `.env` file that you can fill in, then run `./config.py` again. This will create configuration on the data partition.
+
+You're ready to boot the Pi. On boot, the partitions will be expanded and ab-flasher will run.
+
+### Updates
+
+How you run ab-flasher in your own image is up to you. Beyond the bootstrap image it doesn't take responsibility for how it runs or how you update its configuration.
+Any solution which lets you push configuration and run a command will be suitable.
 
 ### Dependencies
 
-Install using `poetry install`.
+Install using `poetry install`, or use the [Docker image](https://hub.docker.com/r/jonoh/ab-flasher).
 
-### Example
+### Usage
 
-Check if update to 1.2.3 is required.
-Flash it to the inactive partition (either sda2 or sda3) then update the bootloader at sda1.
+```
+Usage: ab-flasher [OPTIONS] OS_IMAGE_URL [NEW_VERSION]
+
+Arguments:
+  OS_IMAGE_URL   URL to new gzipped image.  [env var:
+                 AB_OS_IMAGE_URL;required]
+
+  [NEW_VERSION]  New version number (e.g. 1.2.3).  [env var: AB_NEW_VERSION]
+
+Options:
+  --boot-files-url TEXT           URL to gzipped boot files (or skip boot
+                                  files update if not set).  [env var:
+                                  AB_BOOT_FILES_URL]
+
+  --hash-url TEXT                 URL to a file containing a hash, used to
+                                  verify the write.  [env var: AB_HASH_URL;
+                                  default: <OS_IMAGE_URL>.<hash-type>]
+
+  --hash-type TEXT                Type of hash contained in the hash file
+                                  [env var: AB_HASH_TYPE; default: sha256]
+
+  --host TEXT                     Path to host's active root (usually only
+                                  needed for Docker)  [env var: AB_HOST;
+                                  default: /]
+
+  --version-file TEXT             File to check for existing version (at host)
+                                  [env var: AB_VERSION_FILE; default:
+                                  /.ab_version]
+
+  --reboot / --no-reboot          Reboot after an update.  [env var:
+                                  AB_REBOOT; default: True]
+
+  --boot-partition TEXT           Partition number containing boot files  [env
+                                  var: AB_BOOT_PARTITION; default: 1]
+
+  --os-partitions <INTEGER INTEGER>...
+                                  Which two OS partition numbers to consider
+                                  for flashing  [env var: AB_OS_PARTITIONS;
+                                  default: 2, 3]
+
+  --force / --no-force            Assume upgrade is required.  [env var:
+                                  AB_FORCE; default: False]
+
+  --dry-run / --no-dry-run        Take no actions.  [env var: AB_DRY_RUN;
+                                  default: False]
+
+  -v                              Verbosity of logging. Specify multiple times
+                                  for more.  [env var: AB_VERBOSE; default: 0]
+
+  --help                          Show this message and exit.
+
+```
+
+### Examples
+
 ```
 ab-flasher \
-    --hash-url https://example.com/os.img.sha256 \
-    1.2.3 \
-    https://example.com/boot.tar.gz \
-    sda1 \
-    https://example.com/os.img.gz \
-    sda2,sda3
+    --boot-files-url https://example.com/boot.tar.gz \
+    https://example.com/os.img.gz
+    1.2.3
 ```
 
 Using docker:
 ```
 docker run --privileged -v /:/host jonoh/ab-flasher \
-    --host /host \
-    --hash-url https://example.com/os.img.sha256 \
-    1.2.3 \
-    https://example.com/boot.tar.gz \
-    sda1 \
-    https://example.com/os.img.gz \
-    sda2,sda3
+    --boot-files-url https://example.com/boot.tar.gz \
+    https://example.com/os.img.gz
+    1.2.3
 ```
+(The entrypoint passes `--host /host` so that the container can see the host filesystem.)
 
 ## Why it exists
 
-Traditionally you might keep a Pi updated by either running in place upgrades (`apt-get update` etc) or reflashing the SD card. These are slow and risky - package mangers usually do a good job but can take a long time and a failure could leave a headless system in a broken state. For these reasons, it's unusual that people have the confidence to run these updates automatically. Reflashing SD cards is labour intensive, for obvious reasons.
+Traditionally you might keep a Pi updated by either running in place upgrades (`apt-get update` etc) or reflashing the SD card. These options are slow, and risky or difficult to automate.
 
-The double copy strategy implemented by ab-flasher lets updates be fast and reliable, at the expense of more storage space. 
-Updates are fast with minimal downtime because the system can run as normal, then a quick reboot activates the new version.
-It's reliable because the new version will be in an exact and known state, without the risk of a failed update causing breakage.
-All of this means you can confidently set the process to happen automatically.
+The double copy strategy implemented by ab-flasher lets updates be fast and reliable, at the expense of more storage space. The system will be down only for the duration of a reboot and will then boot to a known state.
 
 I built this to keep a small cluster of Raspberry Pis up to date. I found existing tools too complicated for my needs.
 
-## What it doesn't do
+## Caveats
 
 ab-flasher is deliberately simple and makes a lot of assumptions.
+
 Some known limitations:
-- Doesn't poll anywhere for updates, you need to tell it the new version when it runs.
+- Assumes some basic file system tools are available (fdisk, lsblk, findmnt). Tested only on Raspberry Pi OS.
 - Doesn't integrate with the bootloader for failover. The bootloader won't know to failover if a partition is bad.
-- Simplistic in its partiion inspection, so stick to simple partitioning schemes.
 - Only supports gz images (gz tends to use the least cpu/memory anyway).
