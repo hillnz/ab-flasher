@@ -51,6 +51,8 @@ RE_OS_FILES = re.compile('(' + ')|('.join([
     r'\.dtbo?$'
 ]) + ')')
 
+PREFIX_DIRS = ['a', 'b']
+
 async def pipeline(*stage_funcs):
     # Build chain, passing lower stages to higher ones
     lower = None
@@ -396,6 +398,20 @@ async def copy_os_files(source_dir, dest_dir):
         await asyncio.sleep(0)
 
 
+async def delete_os_files(boot_dir):
+    """Delete "OS" files from boot dir, but not from any prefix dirs"""
+    prefix_dirs = [ os.path.join(boot_dir, p) + os.path.sep for p in PREFIX_DIRS ]
+    def in_prefix_dir(path: str):
+        return next(( p for p in prefix_dirs if path.startswith(p) ), False)
+    os_files = [
+        f for f in glob(os.path.join(boot_dir, '**', '**'), recursive=True)
+        if os.path.isfile(f) and RE_OS_FILES.search(f) and not in_prefix_dir(f)
+    ]
+    for f in os_files:
+        os.unlink(f)
+        await asyncio.sleep(0)
+
+
 async def hashsum_check(hash_name, dir, sha256_file):
     try:
         async with aiofiles.open(sha256_file) as f:
@@ -457,11 +473,10 @@ async def main(
         die(f'Active partition ({active_part}) is not in the provided list ({",".join(allowed_partitions)}).')
     boot_dev = disk_parts[boot_partition - 1]
 
-    letters = 'ab'
     boot_prefix = 'a'
     for n, p in enumerate(allowed_partitions):
         if p != active_part:
-            boot_prefix = letters[n]
+            boot_prefix = PREFIX_DIRS[n]
             inactive_part = p
     part_name, part_size = await get_partition(host, inactive_part)
     if not part_name:
@@ -566,6 +581,7 @@ async def main(
                 active_boot = boot_config.get('os_prefix', '').rstrip('/')
                 if os.path.isdir(active_boot):
                     log.info('os_prefix is currently configured - will copy this for use')
+                    await delete_os_files(mountpoint)
                     rmtree(INACTIVE_BOOT)
                     shutil.copytree(active_boot, INACTIVE_BOOT)
                 else:
