@@ -269,8 +269,8 @@ async def digest_file(hasher, file_path: str, length: int = 0):
             bytes_remaining -= len(chunk)
     return hasher.hexdigest()
 
-def deref_partuuid(partuuid):
-    link = '/dev/disk/by-partuuid/' + partuuid
+def deref_partuuid(host, partuuid):
+    link = os.path.join(host or '/', 'dev/disk/by-partuuid', partuuid)
     try:
         deref = os.readlink(link)
         dev = os.path.join(os.path.dirname(link), deref)
@@ -278,8 +278,8 @@ def deref_partuuid(partuuid):
     except OSError:
         return None
 
-def get_partuuid(partition):
-    dev_links = os.listdir('/dev/disk/by-partuuid')
+def get_partuuid(host, partition):
+    dev_links = os.listdir(host + '/dev/disk/by-partuuid')
     for link in dev_links:
         partuuid = os.path.basename(link)
         if deref_partuuid(partuuid) == partition:
@@ -302,7 +302,7 @@ async def update_fstab(host, root_dev):
                 else:
                     _, mnt, remainder = tuple(line.split(maxsplit=2))
                     if mnt == '/':
-                        dev = get_partuuid(root_dev)
+                        dev = get_partuuid(host, root_dev)
                         new_fstab += ' '.join([ f'PARTUUID={dev}', mnt, remainder ])
                     else:
                         new_fstab += line
@@ -321,22 +321,24 @@ def format_cmdline(items: dict):
         for k, v in items.items() 
     ))
 
-async def set_cmdline_root(cmdline_path, root_partition):
+
+async def set_cmdline_root(host, cmdline_path, root_partition):
     # Update cmdline
-    part_uuid = get_partuuid(root_partition)
+    part_uuid = get_partuuid(host, root_partition)
     async with aiofiles.open(cmdline_path, 'r') as f:
         cmdline = parse_cmdline(await f.readline())
     cmdline['root'] = f'PARTUUID={part_uuid}'
     async with aiofiles.open(cmdline_path, 'w') as f:
         await f.write(format_cmdline(cmdline))
 
-async def get_cmdline_root(cmdline_path):
+
+async def get_cmdline_root(host, cmdline_path):
     async with aiofiles.open(cmdline_path, 'r') as f:
         cmdline = parse_cmdline(await f.readline())
     root = cmdline['root']
     assert root.startswith('PARTUUID=')
     _, part_uuid = tuple(root.split('='))
-    return deref_partuuid(part_uuid)
+    return deref_partuuid(host, part_uuid)
 
 
 async def open_boot_config(boot_dir, read=[], write={}):
@@ -590,7 +592,7 @@ async def main(
                 else:
                     await copy_os_files(mountpoint, INACTIVE_BOOT)
 
-        await set_cmdline_root(os.path.join(INACTIVE_BOOT, 'cmdline.txt'), part_name)
+        await set_cmdline_root(host, os.path.join(INACTIVE_BOOT, 'cmdline.txt'), part_name)
 
     for t in asyncio.as_completed([write_os(), write_boot()]):
         await t
