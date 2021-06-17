@@ -408,7 +408,10 @@ async def delete_os_files(boot_dir):
         if os.path.isfile(f) and RE_OS_FILES.search(f) and not in_prefix_dir(f)
     ]
     for f in os_files:
-        os.unlink(f)
+        try:
+            os.unlink(f)
+        except FileNotFoundError:
+            pass
         await asyncio.sleep(0)
 
 
