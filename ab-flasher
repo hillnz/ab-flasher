@@ -579,7 +579,7 @@ async def main(
                 # Build from existing boot files - from root plus current active
                 boot_config = await open_boot_config(mountpoint, ['os_prefix'])
                 active_boot = boot_config.get('os_prefix', '').rstrip('/')
-                if os.path.isdir(active_boot):
+                if os.path.isdir(os.path.join(mountpoint, active_boot)):
                     log.info('os_prefix is currently configured - will copy this for use')
                     await delete_os_files(mountpoint)
                     rmtree(INACTIVE_BOOT)
