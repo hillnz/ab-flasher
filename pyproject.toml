@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ab-flasher"
-version = "0.1.13"
+version = "0.1.14"
 description = ""
 authors = ["Jono Hill <jonathan@hillnz.com>"]
 
