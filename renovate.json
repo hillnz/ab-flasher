@@ -10,6 +10,14 @@
           "datasource=(?<datasource>.*?) depName=(?<depName>.*?)( versioning=(?<versioning>.*?))?\\sARG .*?_VERSION=(?<currentValue>.*)\\s"
         ],
         "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}"
+      },
+      {
+        "fileMatch": ["^\\.github/workflows/build\\.yml$"],
+        "matchStrings": [
+          "base: (?<depName>[a-z0-9_-]+):(?<currentValue>[\\w][\\w.-]+)"
+        ],
+        "datasourceTemplate": "docker",
+        "versioningTemplate": "docker"
       }
     ]
   }
