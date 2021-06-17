@@ -282,7 +282,7 @@ def get_partuuid(host, partition):
     dev_links = os.listdir(host + '/dev/disk/by-partuuid')
     for link in dev_links:
         partuuid = os.path.basename(link)
-        if deref_partuuid(partuuid) == partition:
+        if deref_partuuid(host, partuuid) == partition:
             return partuuid
 
 async def update_fstab(host, root_dev):
