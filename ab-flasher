@@ -583,7 +583,7 @@ async def main(
                 log.warning('No boot files specified, skipping download')
                 # Build from existing boot files - from root plus current active
                 boot_config = await open_boot_config(mountpoint, ['os_prefix'])
-                active_boot = os.path.join(mountpoint, boot_config.get('os_prefix', '').rstrip('/'))
+                active_boot = os.path.join(mountpoint, boot_config.get('os_prefix', '__none__').rstrip('/'))
                 if os.path.isdir(active_boot):
                     log.info('os_prefix is currently configured - will copy this for use')
                     await delete_os_files(mountpoint)
