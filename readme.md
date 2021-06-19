@@ -19,19 +19,12 @@ When you run ab-flasher:, it:
 
 Your Raspberry Pi should contain the standard boot partition, and two ext4 partitions for the OS.
 
-### Bootstrap
-
-If you need a bootstrap image, you can flash with an image containing ab-flasher from the [Releases](https://github.com/hillnz/ab-flasher/releases/latest).
-This image contains the boot partition, two OS partitions, and a data partition. You can flash it with the usual tools (dd, Raspberry Pi Imager, etc).
-
-After flashing, run `./config.py`. If you don't already have one, this will create a `.env` file that you can fill in, then run `./config.py` again. This will create configuration on the data partition.
-
-You're ready to boot the Pi. On boot, the partitions will be expanded and ab-flasher will run.
+[rpi-docker-build](https://github.com/hillnz/rpi-docker-build) can create such disk images from a Docker image, but you can create your image or partitions however you like.
 
 ### Updates
 
-How you run ab-flasher in your own image is up to you. Beyond the bootstrap image it doesn't take responsibility for how it runs or how you update its configuration.
-Any solution which lets you push configuration and run a command will be suitable.
+How you run ab-flasher in your own image is up to you. It doesn't take responsibility for how it runs or how you update its configuration.
+Any solution which lets you push configuration and run a command will be suitable, or you could run it manually.
 
 ### Dependencies
 
@@ -95,7 +88,7 @@ Options:
 ### Examples
 
 ```
-ab-flasher \
+./ab-flasher \
     --boot-files-url https://example.com/boot.tar.gz \
     https://example.com/os.img.gz
     1.2.3
@@ -110,19 +103,11 @@ docker run --privileged -v /:/host jonoh/ab-flasher \
 ```
 (The entrypoint passes `--host /host` so that the container can see the host filesystem.)
 
-## Why it exists
-
-Traditionally you might keep a Pi updated by either running in place upgrades (`apt-get update` etc) or reflashing the SD card. These options are slow, and risky or difficult to automate.
-
-The double copy strategy implemented by ab-flasher lets updates be fast and reliable, at the expense of more storage space. The system will be down only for the duration of a reboot and will then boot to a known state.
-
-I built this to keep a small cluster of Raspberry Pis up to date. I found existing tools too complicated for my needs.
-
 ## Caveats
 
 ab-flasher is deliberately simple and makes a lot of assumptions.
 
 Some known limitations:
 - Assumes some basic file system tools are available (fdisk, lsblk, findmnt). Tested only on Raspberry Pi OS.
-- Doesn't integrate with the bootloader for failover. The bootloader won't know to failover if a partition is bad.
-- Only supports gz images (gz tends to use the least cpu/memory anyway).
+- The Raspberry Pi bootloader doesn't know about a/b flashing, so if the new partition is bad then the Pi will be stuck, and won't fail back to the old one.
+- Only supports gz images.
