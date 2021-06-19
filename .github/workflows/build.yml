@@ -43,17 +43,6 @@ jobs:
   build:
     needs: tag
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        include:
-          # These are configured for updates in renovate.json
-          - base: python:3.9.4
-            # Only works on rpi, but amd64 can be useful for testing
-            platforms: linux/amd64,linux/arm/v7,linux/arm64
-          - base: jonoh/rpi-base:v0.0.8
-            variant: rpi
-            platforms: linux/arm/v7
           
     steps:
       - name: Checkout
@@ -108,11 +97,8 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          build-args: |
-            BASE_IMAGE=${{ matrix.base }}
-          platforms: ${{ matrix.platforms }}
+          platforms: linux/amd64,linux/arm/v7,linux/arm64
           push: ${{ github.ref == 'refs/heads/main' }}
-          load: ${{ github.ref != 'refs/heads/main' && matrix.variant == 'rpi' }}
           tags: ${{ steps.docker_tag.outputs.DOCKER_TAGS }}
 
       - name: Update repo description
@@ -123,32 +109,3 @@ jobs:
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
           repository: ${{ env.DOCKER_REPO }}
           readme-filepath: ./readme.md
-
-      - name: Build OS image
-        if: ${{ matrix.variant == 'rpi' }}
-        env:
-          DOCKER_REPO: ${{ env.DOCKER_REPO }}
-        run: |
-          IMAGE="${DOCKER_REPO}:latest-rpi"
-          if ! docker inspect "$IMAGE" >/dev/null; then
-            echo "Image doesn't already exist locally, pull needed"
-            docker pull "$IMAGE"
-          fi
-          docker run --rm \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            -v $(pwd):/build \
-            jonoh/rpi-docker-build \
-              --docker-image "$IMAGE" \
-              --b-partition \
-              --data-partition \
-              /build/flash.img.gz
-
-      - name: Release
-        uses: softprops/action-gh-release@affa18ef97bc9db20076945705aba8c516139abd
-        if: ${{ github.ref == 'refs/heads/main' && matrix.variant == 'rpi' }}
-        with:
-          files: |
-            flash.img.gz
-          tag_name: ${{ steps.get_version.outputs.VERSION }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
