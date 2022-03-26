@@ -102,7 +102,7 @@ jobs:
           tags: ${{ steps.docker_tag.outputs.DOCKER_TAGS }}
 
       - name: Update repo description
-        uses: peter-evans/dockerhub-description@v2
+        uses: peter-evans/dockerhub-description@v3
         if: ${{ github.ref == 'refs/heads/main' }}
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
