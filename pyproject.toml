@@ -12,7 +12,7 @@ typer = "^0.3.2"
 
 [tool.poetry.dev-dependencies]
 pydantic = {extras = ["dotenv"], version = "^1.8.2"}
-humanize = "^3.8.0"
+humanize = "^4.0.0"
 
 [build-system]
 requires = ["poetry>=0.12"]
