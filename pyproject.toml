@@ -5,7 +5,7 @@ description = ""
 authors = ["Jono Hill <jonathan@hillnz.com>"]
 
 [tool.poetry.dependencies]
-python = ">=3.8,<3.10"
+python = ">=3.13,<3.14"
 aiohttp = "^3.6.2"
 aiofiles = "^0.7.0"
 typer = "^0.3.2"
